@@ -3,4 +3,5 @@ person = {
     "age": 20
 }
 
-print(person["name"])
+print(person["name"], person["age"])
+      
