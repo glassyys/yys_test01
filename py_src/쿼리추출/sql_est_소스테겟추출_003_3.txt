@@ -1,0 +1,405 @@
+쿼리 조금 보완해서 다시 요청 TRUNCATE 가 주석부분까지 분석이되는 것 같으니 그 부분도 보완이 필요하고 아래 요청 적용하고 
+insert 쿼리 유형에 소스테이블 없고 타겟테이블이 중복해서 여러행 나오는 결과는 없어야 함
+
+[원본소스] 결과가 [예제쿼리] 형식에서 TRUNCATE 가 중복으로 추출되고 INSERT 문에 대해 소스테이블 추출이 다 안되는 부분 보완한 전체소스
+주석부분은 쿼리분석에서 제외해야 합니다.
+[예제쿼리]
+SET TIMING ON:
+ALTER SESSION ENABLE PARALLEL DML;
+DECLARE
+v aa NUMBER := 0;
+BEGIN
+DBMS_OUTPUT.PUT LINE ('>');
+DBMS_OUTPUT. PUT LINE ('subl (t start)='||TO CHAR (SYSDATE, 'YYYY-MM-DD HH24:MI:SS')); 
+DBMS_OUTPUT.PUT _LINE ('subl (meth) =' ||'T'); /* Insert, Update, Delete, Select, Truncate */
+--테이블 TRUNCATE
+EXECUTE IMMEDIATE 'TRUNCATE TABLE ${T_M}.MMOS_AGN_SALE_D' ; 
+
+DBMS_OUTPUT. PUT LINE ('subl (rowcnt)=' ||TO CHAR (SQL'RONCOUNT) ); 
+DBMS_OUTPUT. PUT LINE ('subl (sqlcode)='|| SQLCODE)
+DBMS_OUTPUT. PUT LINE ('subl (t_ end)=' ||TO_CHAR(SYSDATE, 'YyYY-MM-DD HH24:MI:SS'));
+
+INSERT INTO ${T_M}.MMOS_AGN_SALE_RNK_D 
+(AGN_ORG_ID, AGN_ORG_CD, NEW_SCRB_CNT, EQP_CHG_CNT, SALE_RNK, SALE_STRD_YM, OPER_DTM ) 
+WITH OBJ_AGN_ORG AS 
+(SELECT AGN_ORG_ID, AGN_ORG_CD, AGN_ORG_NM 
+FROM ${T_M}.MMAP_SHOP_D 
+WHERE  SUB_CD = 'A000' ) 
+SELECT B.AGN_ORG_ID
+      ,B.AGN_ORG_CD
+      ,NVL(A.NEW_SCRB_CNT,0)
+      ,NVL(A.EQP_CHG_CNT , 0) 
+      ,ROW_NUMBER() OVER (ORDER BY NVL(A.NEW_SCRB_CNT,0) + NVL(A.EQP_CHG_CNT,0) DESC, B.AGN_ORG_CD) AS SALE_RNK 
+      ,'$(STRD YM)' AS SALE STRD YM 
+      , TO_CHAR(SYSDATE, ' YYYYMMDDHH24MISS') AS OPER_DTM 
+      FROM ( SELECT AGN_ORG_CD 
+	                ,SUM(NEW SCRB CNT) NEW_SCRB_CNT
+	                ,SUM(EQP CHG CNT) EQP_CHG_CNT 
+                FROM 
+                 ( SELECT A.AGN_ORG_CD COUNT(*) AS NEW_SCRB_CNT 0 AS EQP_CHG_CNT 
+                     FROM (SELECT AGN_ORG_CD FROM OBJ_AGN_ORG GROUP BY AGN ORG_CD) A
+      					 ,${T_M}.MSID_SCRB_S B 
+					WHERE A.TT=B.TT
+				UNION ALL
+                SELECT A.AGN_ORG_CD COUNT(*) AS NEW_SCRB_CNT 0 AS EQP_CHG_CNT 
+                     FROM (SELECT AGN_ORG_CD FROM OBJ_AGN_ORG GROUP BY AGN ORG_CD) A
+      					 ,${T_M}.MSID_SCRB_S B 
+					WHERE A.TT=B.TT
+			   ) A
+						 
+...
+;
+보완 포인트 설명
+따옴표 필터: clean_table_name 함수 내부의 .replace("'", "").replace('"', '') 코드가 변수 끝에 붙은 따옴표를 완전히 제거합니다.
+
+연속 쿼리 처리: extract_queries_from_file 함수에서 MAIN_QUERY_START 정규식을 한 번 더 사용하여 하나의 구문 안에 TRUNCATE와 INSERT가 같이 있으면 리스트로 쪼개어 각각 처리하게 만들었습니다.
+
+WITH 절 확장: sql_typ 결정 시 WITH만 보는 것이 아니라 그 뒤에 따라오는 실질적인 명령어(INSERT, UPDATE 등)를 찾아 할당하도록 로직을 개선했습니다.
+
+ALTER SESSION 스킵: extract_tables 시작 부분에서 ALTER TABLE/VIEW가 아닌 일반 ALTER SESSION 등은 sql_typ을 None으로 반환하여 메인 루프에서 제외시킵니다.
+
+중복 제거: extract_sources에서 반환값을 set으로 관리하고, 최종 list로 변환하므로 동일 소스 테이블이 여러 번 나타나지 않습니다.
+
+보완 포인트 설명
+따옴표 필터: clean_table_name 함수 내부의 .replace("'", "").replace('"', '') 코드가 변수 끝에 붙은 따옴표를 완전히 제거합니다.
+
+
+연속 쿼리 처리: extract_queries_from_file 함수에서 MAIN_QUERY_START 정규식을 한 번 더 사용하여 하나의 구문 안에 TRUNCATE와 INSERT가 같이 있으면 리스트로 쪼개어 각각 처리
+
+
+
+아래 원본소스 아래 내용만 반영한 전체소스
+WITH 절 확장: sql_typ 결정 시 WITH만 보는 것이 아니라 그 뒤에 따라오는 실질적인 명령어(INSERT, UPDATE 등)를 찾아 할당하도록 로직을 개선
+ALTER SESSION 스킵: extract_tables 시작 부분에서 ALTER TABLE/VIEW가 아닌 일반 ALTER SESSION 등은 sql_typ을 None으로 반환하여 메인 루프에서 제외
+중복 제거: 동일 소스 테이블이 여러 번 나타나지 않도록 수정
+
+[원본소스]
+#!/usr/bin/env python3
+# 실행방법:
+# python3 프로그램명.py 절대경로포함소스디렉토리
+
+import os
+import re
+import sys
+import csv
+from datetime import datetime
+
+# ==============================
+# 1. 파라미터 체크
+# ==============================
+
+if len(sys.argv) != 2:
+    print("사용법: python3 프로그램명.py 절대경로포함소스디렉토리")
+    sys.exit(1)
+
+SOURCE_DIR = os.path.abspath(sys.argv[1])
+
+if not os.path.isdir(SOURCE_DIR):
+    print("오류: 유효한 디렉토리가 아닙니다.")
+    sys.exit(1)
+
+# ==============================
+# 2. 설정
+# ==============================
+
+TARGET_EXTENSIONS = ('.sh', '.hql', '.sql', '.uld', '.ld')
+DELIMITER = ","
+
+# 예약어 필터 강화 (CASE, WHEN, SUBSTRING 등 함수 및 키워드 추가)
+RESERVED_WORDS = {
+    "SET","WHERE","AND","OR","ON","WHEN",
+    "THEN","ELSE","VALUES","SELECT",
+    "UPDATE","INSERT","DELETE","MERGE",
+    "USING","FROM","JOIN","INTO",
+    "GROUP","ORDER","BY","HAVING","AS","DISTINCT","ALL",
+    "CASE", "END", "SUBSTRING", "POSITION", "CAST", "COALESCE"
+}
+
+ONLY_FROM_DUAL_PATTERN = re.compile(
+    r'^\s*SELECT\s+.*?\s+FROM\s+DUAL\s*;?\s*$',
+    re.IGNORECASE | re.DOTALL
+)
+
+MAIN_QUERY_START = re.compile(
+    r'\b(CREATE|INSERT|UPDATE|DELETE|MERGE|REPLACE|ALTER|DROP|TRUNCATE|SELECT|WITH)\b',
+    re.IGNORECASE
+)
+
+# ==============================
+# 3. 전처리
+# ==============================
+
+def preprocess(content):
+    content = "\n".join(
+        line for line in content.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    content = "\n".join(
+        line for line in content.splitlines()
+        if not re.match(r'(?i)^\s*DBMS_OUTPUT', line)
+    )
+    content = re.sub(r'--.*', '', content)
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    return content
+
+# ==============================
+# 4. 쿼리 추출
+# ==============================
+
+def extract_queries_from_file(file_path):
+    queries = []
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = preprocess(f.read())
+
+        pos = 0
+        length = len(content)
+        while pos < length:
+            match = MAIN_QUERY_START.search(content, pos)
+            if not match: break
+
+            start = match.start()
+            keyword = match.group(1).upper()
+            if keyword in ("END", "COMMIT"):
+                pos = start + 1
+                continue
+
+            end = start
+            in_string = False
+            quote_char = None
+            while end < length:
+                ch = content[end]
+                if ch in ("'", '"'):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif quote_char == ch:
+                        in_string = False
+                if ch == ";" and not in_string:
+                    end += 1
+                    break
+                end += 1
+
+            query = content[start:end].strip()
+            if query and not ONLY_FROM_DUAL_PATTERN.match(query):
+                queries.append(query)
+            pos = end
+    except Exception as e:
+        print(f"[ERROR] 파일 읽기 실패: {file_path} ({e})")
+    return queries
+
+# ==============================
+# 5. CRUD 분류
+# ==============================
+
+def classify_query(query):
+    q = query.strip().upper()
+    if q.startswith(("CREATE","INSERT","MERGE","REPLACE")): return "C"
+    elif q.startswith("SELECT"): return "R"
+    elif q.startswith(("UPDATE","ALTER")): return "U"
+    elif q.startswith(("DELETE","DROP","TRUNCATE")): return "D"
+    return "R"
+
+# ==============================
+# 6. 테이블 정제
+# ==============================
+
+def clean_table_name(name):
+    if not name: return None
+    
+    # 불필요한 기호 제거
+    name = name.strip().replace('(', '').replace(')', '')
+    name = name.rstrip(";,")
+    
+    # 공백 기준 첫 토큰 (Alias 제거)
+    name = re.split(r'\s+', name)[0]
+
+    # [수정] 예약어, DUAL, 숫자(FROM 1 대응) 제외
+    if not name or name.upper() in RESERVED_WORDS or name.upper() == "DUAL":
+        return None
+    
+    # 숫자로만 이루어진 경우 제외 (수정사항 5번)
+    if re.match(r'^[0-9]+$', name) or name.isdigit():
+        return None
+    
+    # 함수 형태(substring, position 등)가 포함된 토큰 제외 (수정사항 3, 4번 보완)
+    if '(' in name or '|' in name or '+' in name:
+        return None
+
+    return name
+
+# ==============================
+# 🔥 7. SOURCE 추출 (오류 수정 로직 집중)
+# ==============================
+
+def extract_sources(query):
+    sources = set()
+    
+    # 1. 괄호 쌍을 찾아 서브쿼리 내부 재귀 분석
+    stack = []
+    brackets = []
+    for i, char in enumerate(query):
+        if char == '(':
+            stack.append(i)
+        elif char == ')' and stack:
+            start_idx = stack.pop()
+            if not stack: # 최상위 괄호만 추출
+                brackets.append(query[start_idx+1:i])
+
+    for sub_q in brackets:
+        # 서브쿼리인 경우에만 재귀 분석 (수정사항 1번 대응)
+        if re.search(r'\bSELECT\b', sub_q, re.IGNORECASE):
+            sources.update(extract_sources(sub_q))
+
+    # 2. FROM/JOIN 뒤의 테이블명 추출 (SELECT~FROM 사이 구간 무시 로직 포함)
+    pattern = re.compile(r'\b(FROM|JOIN|USING)\b', re.IGNORECASE)
+    
+    for match in pattern.finditer(query):
+        start = match.end()
+        segment = query[start:].strip()
+        
+        # [수정사항 5번] FROM 1 과 같이 숫자가 바로 나오면 스킵
+        if re.match(r'^\s*\d+\b', segment):
+            continue
+
+        # [수정사항 3, 4번 대응] 서브쿼리가 시작되면 위에서 이미 처리했으므로 해당 구간 스킵
+        if segment.startswith('('):
+            continue
+
+        # 실제 테이블명이 나오는 구간만 분리 (다음 키워드 전까지)
+        # WHERE, GROUP, ORDER, ON, WHEN, SET, VALUES, SELECT(서브쿼리용) 등
+        segment = re.split(r'\b(WHERE|GROUP|ORDER|ON|WHEN|SET|VALUES|SELECT|LIMIT|UNION|HAVING|AS)\b', segment, flags=re.IGNORECASE)[0]
+        
+        # 콤마로 연결된 다중 테이블 처리 (tb1 a, tb2 b)
+        parts = segment.split(",")
+        for part in parts:
+            part = part.strip()
+            # 함수나 케이스문이 섞인 컬럼 리스트 구간은 건너뜀 (수정사항 2번 대응)
+            if not part or part.startswith('('): continue
+            
+            tokens = part.split()
+            if tokens:
+                tbl = clean_table_name(tokens[0])
+                if tbl:
+                    sources.add(tbl)
+                        
+    return sources
+
+# ==============================
+# 8. SOURCE/TARGET 추출
+# ==============================
+
+def extract_tables(query):
+    sql_match = MAIN_QUERY_START.search(query)
+    sql_typ = sql_match.group(1).upper() if sql_match else "UNKNOWN"
+
+    source_tables = set()
+    target_tables = set()
+
+    # Target 추출 로직
+    target_patterns = {
+        "INSERT": r'INSERT\s+(?:INTO|OVERWRITE\s+TABLE|OVERWRITE)?\s+([^\s(]+)',
+        "CREATE": r'CREATE\s+(?:TABLE|VIEW)\s+([^\s(]+)',
+        "MERGE": r'MERGE\s+INTO\s+([^\s(]+)',
+        "REPLACE": r'REPLACE\s+INTO\s+([^\s(]+)',
+        "UPDATE": r'UPDATE\s+([^\s(]+)',
+        "DELETE": r'DELETE\s+FROM\s+([^\s(]+)',
+        "TRUNCATE": r'TRUNCATE\s+TABLE\s+([^\s(]+)',
+        "DROP": r'DROP\s+TABLE\s+([^\s(]+)',
+        "ALTER": r'ALTER\s+TABLE\s+([^\s(]+)'
+    }
+
+    if sql_typ in target_patterns:
+        match = re.search(target_patterns[sql_typ], query, re.IGNORECASE)
+        if match:
+            tbl = clean_table_name(match.group(1))
+            if tbl: target_tables.add(tbl)
+
+    # 소스 추출 시 WITH 절에 정의된 임시 테이블명(CTE) 제외 로직 추가
+    source_tables = extract_sources(query)
+    
+    # WITH 절 별칭 추출
+    with_aliases = set()
+    if sql_typ == "WITH":
+        # WITH alias AS ( ... ) 패턴에서 alias 추출
+        with_matches = re.finditer(r'(\w+)\s+AS\s*\(', query, re.IGNORECASE)
+        for m in with_matches:
+            with_aliases.add(m.group(1).upper())
+            
+    # 소스 테이블에서 WITH 임시 테이블 제외
+    final_sources = [s for s in source_tables if s.upper() not in with_aliases]
+    
+    return sql_typ, final_sources, list(target_tables)
+
+# ==============================
+# 9. 메인
+# ==============================
+
+def main():
+    if len(sys.argv) < 2: return
+    
+    program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+    source_last_dir = os.path.basename(SOURCE_DIR.rstrip(os.sep))
+
+    out_dir = os.path.join(os.getcwd(), "out")
+    os.makedirs(out_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"{program_name}_{source_last_dir}_{timestamp}.csv"
+    output_path = os.path.join(out_dir, output_filename)
+
+    total_files = 0
+    total_queries = 0
+    total_output_rows = 0
+    total_file_lines = 0
+
+    with open(output_path, 'w', newline='', encoding='utf-8') as out_file:
+        writer = csv.writer(out_file, delimiter=DELIMITER)
+        writer.writerow([
+            "crud_type","abs_path","file","full_path",
+            "sql_typ","source_table","target_table"
+        ])
+
+        for root, _, files in os.walk(SOURCE_DIR):
+            for file in files:
+                if file.lower().endswith(TARGET_EXTENSIONS):
+                    total_files += 1
+                    full_path = os.path.join(root, file)
+                    abs_path = os.path.abspath(root)
+
+                    try:
+                        with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            content_lines = f.readlines()
+                            total_file_lines += len(content_lines)
+                    except: pass
+
+                    queries = extract_queries_from_file(full_path)
+
+                    for query in queries:
+                        total_queries += 1
+                        crud_type = classify_query(query)
+                        sql_typ, sources, targets = extract_tables(query)
+
+                        out_targets = targets if targets else [None]
+                        out_sources = sources if sources else [None]
+
+                        for tgt in out_targets:
+                            for src in out_sources:
+                                writer.writerow([
+                                    crud_type, abs_path, file, full_path,
+                                    sql_typ, src, tgt
+                                ])
+                                total_output_rows += 1
+
+    print("====================================")
+    print(" SQL 추출 완료 (이미지 오류 수정판)")
+    print("====================================")
+    print(f"출력 파일 위치    : {output_path}")
+    print(f"처리 파일 건수    : {total_files}")
+    print(f"추출 쿼리 건수    : {total_queries}")
+    print(f"생성 행 건수      : {total_output_rows}")
+    print(f"전체 파일 라인 수 : {total_file_lines}")
+    print("====================================")
+
+if __name__ == "__main__":
+    main()

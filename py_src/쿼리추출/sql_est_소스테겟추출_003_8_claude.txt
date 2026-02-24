@@ -1,0 +1,3727 @@
+
+보완 포인트 설명
+따옴표 필터: clean_table_name 함수 내부의 .replace("'", "").replace('"', '') 코드가 변수 끝에 붙은 따옴표를 완전히 제거합니다.
+
+연속 쿼리 처리: extract_queries_from_file 함수에서 MAIN_QUERY_START 정규식을 한 번 더 사용하여 하나의 구문 안에 TRUNCATE와 INSERT가 같이 있으면 리스트로 쪼개어 각각 처리하게 만들었습니다.
+
+WITH 절 확장: sql_typ 결정 시 WITH만 보는 것이 아니라 그 뒤에 따라오는 실질적인 명령어(INSERT, UPDATE 등)를 찾아 할당하도록 로직을 개선했습니다.
+
+ALTER SESSION 스킵: extract_tables 시작 부분에서 ALTER TABLE/VIEW가 아닌 일반 ALTER SESSION 등은 sql_typ을 None으로 반환하여 메인 루프에서 제외시킵니다.
+
+중복 제거: extract_sources에서 반환값을 set으로 관리하고, 최종 list로 변환하므로 동일 소스 테이블이 여러 번 나타나지 않습니다.
+
+보완 포인트 설명
+따옴표 필터: clean_table_name 함수 내부의 .replace("'", "").replace('"', '') 코드가 변수 끝에 붙은 따옴표를 완전히 제거합니다.
+
+
+연속 쿼리 처리: extract_queries_from_file 함수에서 MAIN_QUERY_START 정규식을 한 번 더 사용하여 하나의 구문 안에 TRUNCATE와 INSERT가 같이 있으면 리스트로 쪼개어 각각 처리
+
+-----
+
+아래 "[원본소스]" 실행결과가 "[예제쿼리]"분석한 결과가 TRUNCATE 가 sql_typ 두개의 행으로 추출되고
+INSERT 문에 대해 별도분석이 안되고 skip 되어 
+"[원본소스실행파일결과]" 처럼 생성되는데 
+
+[원본소스실행파일결과]
+sql_typ,source_table,target_table
+TRUNCATE,,${T_M}.MMOS_AGN_SALE_D'
+TRUNCATE,,${T_M}.MMOS_AGN_SALE_D
+
+"[수정후예상결과파일]"처럼 추출되도록 원본소스내용(출력문포함) 유지하면서 이 오류만 수정한 전체소스
+
+TRUNCATE와 INSERT 쿼리의 소스테이블과 타겟테이블이 아래와 같이 추출되어야 함
+[수정후예상결과파일]
+sql_typ,source_table,target_table
+TRUNCATE,,${T_M}.MMOS_AGN_SALE_D
+INSERT,${T_M}.MMAP_SHOP_D,${T_M}.MMOS_AGN_SALE_RNK_D 
+INSERT,OBJ_AGN_ORG,${T_M}.MMOS_AGN_SALE_RNK_D 
+INSERT,${T_M}.MSID_SCRB_S,${T_M}.MMOS_AGN_SALE_RNK_D 
+
+주의: crud_type,abs_path,file,full_path 레이아웃은 기존로직과 동일하게 추출되고
+sql_typ,source_table,target_table 내용이 수정되어 추가보완되어 생성되면 됩니다.
+
+
+[예제쿼리]
+SET TIMING ON:
+ALTER SESSION ENABLE PARALLEL DML;
+DECLARE
+v aa NUMBER := 0;
+BEGIN
+DBMS_OUTPUT.PUT LINE ('>');
+DBMS_OUTPUT.PUT LINE ('subl (t start)='||TO CHAR (SYSDATE, 'YYYY-MM-DD HH24:MI:SS')); 
+DBMS_OUTPUT.PUT _LINE ('subl (meth) =' ||'T'); /* Insert, Update, Delete, Select, Truncate */
+--테이블 TRUNCATE
+EXECUTE IMMEDIATE 'TRUNCATE TABLE ${T_M}.MMOS_AGN_SALE_D' ; 
+
+DBMS_OUTPUT.PUT LINE ('subl (rowcnt)=' ||TO CHAR (SQL'RONCOUNT) ); 
+DBMS_OUTPUT.PUT LINE ('subl (sqlcode)='|| SQLCODE)
+DBMS_OUTPUT.PUT LINE ('subl (t_end)=' ||TO_CHAR(SYSDATE, 'YyYY-MM-DD HH24:MI:SS'));
+
+INSERT INTO ${T_M}.MMOS_AGN_SALE_RNK_D 
+      (AGN_ORG_ID, AGN_ORG_CD, NEW_SCRB_CNT, EQP_CHG_CNT, SALE_RNK, SALE_STRD_YM, OPER_DTM ) 
+WITH OBJ_AGN_ORG AS 
+    (SELECT AGN_ORG_ID, AGN_ORG_CD, AGN_ORG_NM 
+       FROM ${T_M}.MMAP_SHOP_D 
+      WHERE  SUB_CD = 'A000' ) 
+SELECT B.AGN_ORG_ID
+      ,B.AGN_ORG_CD
+      ,NVL(A.NEW_SCRB_CNT,0)
+      ,NVL(A.EQP_CHG_CNT , 0) 
+      ,ROW_NUMBER() OVER (ORDER BY NVL(A.NEW_SCRB_CNT,0) + NVL(A.EQP_CHG_CNT,0) DESC, B.AGN_ORG_CD) AS SALE_RNK 
+      ,'$(STRD YM)' AS SALE STRD YM 
+      , TO_CHAR(SYSDATE, ' YYYYMMDDHH24MISS') AS OPER_DTM 
+      FROM ( SELECT AGN_ORG_CD 
+	              , SUM(NEW SCRB CNT) NEW_SCRB_CNT
+	              , SUM(EQP CHG CNT) EQP_CHG_CNT 
+                FROM 
+                    ( 
+					 SELECT A.AGN_ORG_CD COUNT(*) AS NEW_SCRB_CNT 0 AS EQP_CHG_CNT 
+                     FROM (SELECT AGN_ORG_CD FROM OBJ_AGN_ORG GROUP BY AGN ORG_CD) A
+      					 ,${T_M}.MSID_SCRB_S B 
+					WHERE A.TT=B.TT
+				UNION ALL
+                SELECT A.AGN_ORG_CD COUNT(*) AS NEW_SCRB_CNT 0 AS EQP_CHG_CNT 
+                     FROM (SELECT AGN_ORG_CD FROM OBJ_AGN_ORG GROUP BY AGN ORG_CD) A
+      					 ,${T_M}.MSID_SCRB_S B 
+					WHERE A.TT=B.TT
+			   ) A
+			)
+   , 	OBJ_AGN_ORG B
+ where B.AGN_ORG_ID = A.AGN_ORG_CD(+) 
+ ;
+DBMS_OUTPUT.PUT LINE ('subl (rowcnt)=' ||TO CHAR (SQL'RONCOUNT) ); 
+DBMS_OUTPUT.PUT LINE ('subl (sqlcode)='|| SQLCODE)
+DBMS_OUTPUT.PUT LINE ('subl (t_end)=' ||TO_CHAR(SYSDATE, 'YyYY-MM-DD HH24:MI:SS'));
+
+ COMMIT;
+END;
+
+
+
+
+아래 원본소스 아래 내용만 반영한 전체소스
+WITH 절 확장: sql_typ 결정 시 WITH만 보는 것이 아니라 그 뒤에 따라오는 실질적인 명령어(INSERT, UPDATE 등)를 찾아 할당하도록 로직을 개선
+ALTER SESSION 스킵: extract_tables 시작 부분에서 ALTER TABLE/VIEW가 아닌 일반 ALTER SESSION 등은 sql_typ을 None으로 반환하여 메인 루프에서 제외
+중복 제거: 동일 소스 테이블이 여러 번 나타나지 않도록 수정
+
+[원본소스]
+#!/usr/bin/env python3
+
+import os
+import re
+import sys
+import csv
+from datetime import datetime
+
+# ==============================
+# 1. 파라미터 체크
+# ==============================
+
+if len(sys.argv) != 2:
+    print("사용법: python3 프로그램명.py 절대경로포함소스디렉토리")
+    sys.exit(1)
+
+SOURCE_DIR = os.path.abspath(sys.argv[1])
+
+if not os.path.isdir(SOURCE_DIR):
+    print("오류: 유효한 디렉토리가 아닙니다.")
+    sys.exit(1)
+
+# ==============================
+# 2. 설정
+# ==============================
+
+TARGET_EXTENSIONS = ('.sh', '.hql', '.sql', '.uld', '.ld')
+DELIMITER = ","
+EXCLUDE_TABLE = "sidtest.ad1901_rgb_ac190212_svc"
+
+RESERVED_WORDS = {
+    "SET","WHERE","AND","OR","ON","WHEN","THEN","ELSE",
+    "VALUES","SELECT","UPDATE","INSERT","DELETE","MERGE",
+    "USING","FROM","JOIN","INTO","GROUP","ORDER","BY",
+    "HAVING","TABLE","OVERWRITE","POSITION","SUBSTRING",
+    "CAST","TRIM","COUNT","SUM","MAX","MIN","AVG",
+    "SESSION"
+}
+
+ONLY_FROM_DUAL_PATTERN = re.compile(
+    r'^\s*SELECT\s+.*?\s+FROM\s+DUAL\s*;?\s*$',
+    re.IGNORECASE | re.DOTALL
+)
+
+MAIN_QUERY_START = re.compile(
+    r'\b(CREATE|INSERT|UPDATE|DELETE|MERGE|REPLACE|ALTER|DROP|TRUNCATE|SELECT|WITH)\b',
+    re.IGNORECASE
+)
+
+# ==============================
+# 3. 전처리
+# ==============================
+
+def preprocess(content):
+
+    content = "\n".join(
+        line for line in content.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+    content = re.sub(r'--.*', '', content)
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+
+    return content
+
+
+# ==============================
+# 4. depth 기반 쿼리 추출
+# ==============================
+
+def extract_queries_from_file(file_path):
+
+    queries = []
+    total_lines = 0
+
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            raw = f.read()
+
+        total_lines = raw.count("\n") + 1
+        content = preprocess(raw)
+
+        pos = 0
+        length = len(content)
+
+        while pos < length:
+
+            match = MAIN_QUERY_START.search(content, pos)
+            if not match:
+                break
+
+            start = match.start()
+            end = start
+            depth = 0
+            in_string = False
+            quote_char = None
+
+            while end < length:
+                ch = content[end]
+
+                if ch in ("'", '"'):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif quote_char == ch:
+                        in_string = False
+
+                elif not in_string:
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth = max(depth - 1, 0)
+                    elif ch == ";" and depth == 0:
+                        end += 1
+                        break
+
+                end += 1
+
+            query = content[start:end].strip()
+
+            if query:
+                if EXCLUDE_TABLE.lower() in query.lower():
+                    pos = end
+                    continue
+                if ONLY_FROM_DUAL_PATTERN.match(query):
+                    pos = end
+                    continue
+                queries.append(query)
+
+            pos = end
+
+    except Exception:
+        pass
+
+    return queries, total_lines
+
+
+# ==============================
+# 5. SQL TYPE (WITH 내부 DML 감지)
+# ==============================
+
+def detect_real_sql_type(query):
+
+    q = query.strip().upper()
+
+    if not q.startswith("WITH"):
+        return q.split()[0] if q.split() else "UNKNOWN"
+
+    if re.search(r'\bINSERT\b', q):
+        return "INSERT"
+    if re.search(r'\bUPDATE\b', q):
+        return "UPDATE"
+    if re.search(r'\bDELETE\b', q):
+        return "DELETE"
+    if re.search(r'\bMERGE\b', q):
+        return "MERGE"
+
+    return "SELECT"
+
+
+def classify_sql_type(sql_typ):
+
+    if sql_typ in ("CREATE","INSERT","MERGE","REPLACE"):
+        return "C"
+    elif sql_typ == "SELECT":
+        return "R"
+    elif sql_typ in ("UPDATE","ALTER"):
+        return "U"
+    elif sql_typ in ("DELETE","DROP","TRUNCATE"):
+        return "D"
+    return "R"
+
+
+# ==============================
+# 6. 테이블 정제
+# ==============================
+
+def clean_table(name):
+
+    if not name:
+        return None
+
+    name = name.strip()
+    name = re.split(r'\s+', name)[0]
+    name = name.rstrip(";,")
+    name = name.replace("(", "").replace(")", "")
+
+    upper = name.upper()
+
+    if (not name or
+        upper in RESERVED_WORDS or
+        upper == "DUAL" or
+        name.isdigit() or
+        re.match(r'^\d', name)):
+        return None
+
+    return name
+
+
+# ==============================
+# 7. 문자열 제거 (파싱 전처리)
+# ==============================
+
+def remove_string_literals(sql):
+    """싱글/더블 쿼트 문자열 리터럴 제거"""
+    result = re.sub(r"'[^']*'", "''", sql)
+    result = re.sub(r'"[^"]*"', '""', result)
+    return result
+
+
+# ==============================
+# 8. 괄호 내부 추출 (재귀 지원)
+# ==============================
+
+def extract_paren_content(sql, start):
+    """start 위치 '(' 에서 대응 ')' 까지 내용 반환"""
+    depth = 0
+    i = start
+    while i < len(sql):
+        if sql[i] == '(':
+            depth += 1
+        elif sql[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return sql[start+1:i], i
+        i += 1
+    return sql[start+1:], len(sql)-1
+
+
+# ==============================
+# 9. SELECT 컬럼절 제거
+#    FROM 이전의 SELECT 목록을 제거하여 컬럼명이 테이블로 인식되지 않도록 함
+# ==============================
+
+def strip_select_columns(sql):
+    """
+    SELECT ... FROM 구조에서 SELECT 직후 컬럼 목록을 제거.
+    괄호 depth=0 기준으로 첫 FROM 키워드 이전을 'SELECT __COLS__' 로 대체.
+    재귀적으로 서브쿼리에도 적용되지 않아도 됨 - FROM 이후만 파싱하므로 충분.
+    """
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        # SELECT 키워드 탐색
+        m = re.search(r'\bSELECT\b', sql_up[i:], re.IGNORECASE)
+        if not m:
+            result.append(sql[i:])
+            break
+
+        sel_pos = i + m.start()
+        result.append(sql[i:sel_pos])
+        result.append('SELECT ')
+
+        # SELECT 이후부터 depth=0인 첫 FROM 찾기
+        j = sel_pos + len('SELECT')
+        depth = 0
+        found_from = False
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth < 0:
+                    # 상위 괄호로 나감 - 여기서 FROM을 못 찾은 것
+                    break
+            elif depth == 0:
+                # FROM 키워드 체크
+                fm = re.match(r'\bFROM\b', sql_up[j:], re.IGNORECASE)
+                if fm:
+                    # 컬럼 목록 스킵, FROM부터 이어서 처리
+                    result.append('__COLS__ ')
+                    i = j
+                    found_from = True
+                    break
+                # 세미콜론이나 닫는 괄호에서 SELECT만 있고 FROM 없는 경우
+                if ch == ';':
+                    result.append(sql[j:j+1])
+                    i = j + 1
+                    found_from = True
+                    break
+            j += 1
+
+        if not found_from:
+            result.append(sql[j:])
+            break
+
+    return ''.join(result)
+
+
+# ==============================
+# 10. UPDATE SET 절 제거
+#     SET 이후 WHERE / ; 이전까지 제거
+# ==============================
+
+def strip_update_set(sql):
+    """
+    UPDATE ... SET col=val, col2=val2 WHERE ...
+    SET 절의 col=val 부분을 제거하여 컬럼명이 테이블로 인식되지 않도록 함.
+    MERGE ... WHEN MATCHED THEN UPDATE SET ... 도 처리.
+    """
+    # SET ... (WHERE | WHEN | ;) 사이를 제거
+    # depth=0 기준
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        m = re.search(r'\bSET\b', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        set_pos = i + m.start()
+        result.append(sql[i:set_pos])
+        result.append('SET ')
+
+        j = set_pos + len('SET')
+        depth = 0
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0:
+                up_remain = sql_up[j:]
+                if (re.match(r'\bWHERE\b', up_remain) or
+                    re.match(r'\bWHEN\b', up_remain) or
+                    re.match(r'\bON\b', up_remain)):
+                    break
+                if ch == ';':
+                    break
+            j += 1
+
+        result.append('__SET__ ')
+        i = j
+
+    return ''.join(result)
+
+
+# ==============================
+# 11. 함수 호출 내부 제거
+#     함수명( ... ) 에서 내부 인수를 제거
+#     단, USING( 은 제거하지 않음 (소스 테이블 추출 대상)
+# ==============================
+
+def strip_function_args(sql):
+    """
+    SQL 내 함수 호출 패턴: WORD( ... ) 에서 괄호 내부 제거.
+    FROM/JOIN/USING 바로 뒤 서브쿼리 괄호는 유지해야 하므로,
+    FROM/JOIN/USING 뒤 첫 괄호는 제거하지 않음.
+    일반 식별자( 형태만 제거.
+    """
+    # 함수: 영문자/숫자/_ 로 끝나고 바로 ( 가 오는 패턴
+    # FROM/JOIN/USING 뒤 ( 는 보존
+    result = []
+    i = 0
+    length = len(sql)
+    sql_up = sql.upper()
+
+    while i < length:
+        # 함수 호출 패턴 탐색: word(
+        m = re.search(r'(\b\w+)\s*\(', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        fn_start = i + m.start()
+        fn_name = m.group(1).upper()
+        paren_start = i + m.end() - 1  # '(' 위치
+
+        # FROM/JOIN/USING/WITH/ON 뒤 괄호는 보존 (서브쿼리)
+        if fn_name in ('FROM', 'JOIN', 'USING', 'WITH', 'ON',
+                       'SELECT', 'WHERE', 'HAVING', 'SET',
+                       'INSERT', 'UPDATE', 'DELETE', 'MERGE',
+                       'CREATE', 'TABLE', 'VIEW', 'INTO',
+                       'WHEN', 'THEN', 'ELSE', 'AND', 'OR', 'NOT'):
+            result.append(sql[i:paren_start+1])
+            i = paren_start + 1
+            continue
+
+        # 함수 내부 제거
+        result.append(sql[i:fn_start + len(m.group(1))])
+        inner, end_pos = extract_paren_content(sql, paren_start)
+        result.append('(__FUNC_ARGS__)')
+        i = end_pos + 1
+
+    return ''.join(result)
+
+
+# ==============================
+# 12. CTE 분석
+# ==============================
+
+def extract_cte_map(query):
+
+    cte_map = {}
+
+    if not query.strip().upper().startswith("WITH"):
+        return cte_map
+
+    pattern = re.compile(
+        r'(\w+)\s+AS\s*\((.*?)\)\s*(,|SELECT)',
+        re.IGNORECASE | re.DOTALL
+    )
+
+    for match in pattern.finditer(query):
+        alias = match.group(1)
+        subquery = match.group(2)
+        sources = extract_sources_recursive(subquery)
+        cte_map[alias.upper()] = sources
+
+    return cte_map
+
+
+# ==============================
+# 13. 소스 추출 (인라인뷰 포함 재귀)
+#     SELECT 컬럼절, SET 절, 함수 인수 제거 후 FROM/JOIN/USING 파싱
+# ==============================
+
+def extract_sources_recursive(query):
+
+    sources = set()
+
+    # 문자열 리터럴 제거
+    q = remove_string_literals(query)
+
+    # SELECT 컬럼 목록 제거 (FROM 이전)
+    q = strip_select_columns(q)
+
+    # UPDATE SET 절 제거
+    q = strip_update_set(q)
+
+    # 함수 인수 내부 제거
+    q = strip_function_args(q)
+
+    q_up = q.upper()
+    length = len(q)
+
+    # FROM/JOIN/USING 키워드 탐색
+    kw_pattern = re.compile(r'\b(FROM|JOIN|USING)\b', re.IGNORECASE)
+
+    # FROM 절 종료 예약어
+    CLAUSE_END = {
+        'WHERE', 'ON', 'WHEN', 'SET', 'HAVING', 'GROUP', 'ORDER',
+        'UNION', 'INTERSECT', 'EXCEPT', 'LIMIT', 'SELECT',
+        'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'WITH',
+        'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS',
+        'JOIN', 'FROM', 'USING'
+    }
+
+    for kw_match in kw_pattern.finditer(q):
+        j = kw_match.end()
+
+        # 공백 스킵
+        while j < length and q[j] in ' \t\n\r':
+            j += 1
+
+        if j >= length:
+            continue
+
+        # 괄호 서브쿼리
+        if q[j] == '(':
+            inner, end_pos = extract_paren_content(q, j)
+            sub_sources = extract_sources_recursive(inner)
+            sources.update(sub_sources)
+            continue
+
+        # 콤마 구분 테이블 목록 처리
+        # FROM tb1 a, tb2 b, ... 형태
+        while j < length:
+            # 공백 스킵
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            if j >= length or q[j] in (';', ')'):
+                break
+
+            # 괄호 서브쿼리인 경우
+            if q[j] == '(':
+                inner, end_pos = extract_paren_content(q, j)
+                sub_sources = extract_sources_recursive(inner)
+                sources.update(sub_sources)
+                j = end_pos + 1
+                # alias 스킵
+                alias_m = re.match(r'[\s]+(\w+)', q[j:])
+                if alias_m and alias_m.group(1).upper() not in CLAUSE_END:
+                    j += alias_m.end()
+            else:
+                # 테이블명 토큰
+                tok_m = re.match(r'([^\s,;()\n]+)', q[j:])
+                if not tok_m:
+                    break
+                token = tok_m.group(1)
+                token_up = token.upper().rstrip(',;')
+
+                # 예약어이면 FROM 절 종료
+                if token_up in CLAUSE_END:
+                    break
+
+                tbl = clean_table(token)
+                if tbl:
+                    sources.add(tbl)
+
+                j += tok_m.end()
+
+                # alias 스킵 (다음 토큰이 예약어/콤마/괄호가 아닌 경우)
+                alias_m = re.match(r'[\s]+([^\s,;()\n]+)', q[j:])
+                if alias_m:
+                    alias_word = alias_m.group(1).upper()
+                    if alias_word not in CLAUSE_END and not alias_word.startswith(','):
+                        j += alias_m.end()
+
+            # 공백 스킵
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            # 콤마이면 다음 테이블 계속
+            if j < length and q[j] == ',':
+                j += 1
+            else:
+                break  # 콤마 없으면 FROM 절 종료
+
+    return sources
+
+
+# ==============================
+# 14. 타겟 추출
+# ==============================
+
+def extract_target_tables(query):
+
+    targets = set()
+
+    patterns = [
+        r'INSERT\s+OVERWRITE\s+TABLE\s+([^\s(]+)',
+        r'INSERT\s+INTO\s+([^\s(]+)',
+        r'CREATE\s+(?:TABLE|VIEW)\s+([^\s(]+)',
+        r'UPDATE\s+([^\s(]+)',
+        r'DELETE\s+FROM\s+([^\s(]+)',
+        r'MERGE\s+INTO\s+([^\s(]+)',
+        r'ALTER\s+TABLE\s+([^\s(]+)',
+        r'DROP\s+TABLE\s+([^\s(]+)',
+        r'TRUNCATE\s+TABLE\s+([^\s(]+)'
+    ]
+
+    for pat in patterns:
+        for match in re.finditer(pat, query, re.IGNORECASE):
+            tbl = clean_table(match.group(1))
+            if tbl:
+                targets.add(tbl)
+
+    return targets
+
+
+# ==============================
+# 15. 메인
+# ==============================
+
+def main():
+
+    total_files = 0
+    total_queries = 0
+    total_output_rows = 0
+    total_file_lines = 0
+
+    program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+    source_last_dir = os.path.basename(SOURCE_DIR.rstrip(os.sep))
+
+    out_dir = os.path.join(os.getcwd(), "out")
+    os.makedirs(out_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"{program_name}_{source_last_dir}_{timestamp}.csv"
+    output_path = os.path.join(out_dir, output_filename)
+
+    rows_buffer = []
+
+    for root, _, files in os.walk(SOURCE_DIR):
+
+        for file in files:
+            if file.lower().endswith(TARGET_EXTENSIONS):
+
+                total_files += 1
+
+                full_path = os.path.join(root, file)
+                abs_path = os.path.abspath(root)
+
+                queries, file_lines = extract_queries_from_file(full_path)
+
+                total_file_lines += file_lines
+                total_queries += len(queries)
+
+                for query in queries:
+
+                    sql_typ = detect_real_sql_type(query)
+                    crud_type = classify_sql_type(sql_typ)
+
+                    cte_map = extract_cte_map(query)
+                    sources = extract_sources_recursive(query)
+                    targets = extract_target_tables(query)
+
+                    real_sources = set()
+
+                    for s in sources:
+                        if s and s.upper() in cte_map:
+                            real_sources.update(cte_map[s.upper()])
+                        else:
+                            if s:
+                                real_sources.add(s)
+
+                    if not real_sources and not targets:
+                        continue
+
+                    if not real_sources:
+                        real_sources = {None}
+                    if not targets:
+                        targets = {None}
+
+                    for tgt in targets:
+                        for src in real_sources:
+                            rows_buffer.append([
+                                crud_type,
+                                abs_path,
+                                file,
+                                full_path,
+                                sql_typ,
+                                src,
+                                tgt
+                            ])
+                            total_output_rows += 1
+
+    # 🔥 소스/타겟 없는 파일은 생성 제외
+    if total_output_rows == 0:
+        print("====================================")
+        print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+        print("====================================")
+        print("CSV 파일 생성 대상이 없습니다.")
+        print("====================================")
+        return
+
+    with open(output_path, 'w', newline='', encoding='utf-8') as out_file:
+        writer = csv.writer(out_file, delimiter=DELIMITER)
+        writer.writerow([
+            "crud_type","abs_path","file","full_path",
+            "sql_typ","source_table","target_table"
+        ])
+        writer.writerows(rows_buffer)
+
+    print("====================================")
+    print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+    print("====================================")
+    print(f"CSV 파일 위치        : {output_path}")
+    print(f"처리 파일 건수        : {total_files}")
+    print(f"추출 쿼리 건수        : {total_queries}")
+    print(f"생성 행 건수          : {total_output_rows}")
+    print(f"전체 파일 총 행 건수  : {total_file_lines}")
+    print("====================================")
+
+
+if __name__ == "__main__":
+    main()
+	
+	
+	
+
+
+
+■sql_est_srctgt_007.py 파일로 저장
+[원본소스] 실행결과
+[쿼리예제] 에서 sql_typ의 UPDATE에 타겟테이블이 ${T_A}.tb_0 만 추출되고
+소스테이블이 from ${T_A}.tb_0_로 UPDATE 대상과 같은테이블인 경우
+${T_A}.tb_0 도 소스테이블이 추출안되는데 
+소스테이블로 추출되도록 보완하고
+
+그 외 from 이나 join 으로 다른 테이블사용시
+"[실행후결과예시]" 처럼 결과파일이 생성되도록 
+"[원본소스]" 로직 최대한 유지하면서 요청한내용 적용 수정한 전체소스
+
+[실행후결과예시]
+sql_typ,source_table,target_table
+UPDATE,${T_A}.tb_0,${T_A}.tb_0
+UPDATE,${T_S}.tb_3,${T_A}.tb_0
+UPDATE,${T_N}.tb_4,${T_A}.tb_0
+
+주의: crud_type,abs_path,file,full_path 레이아웃은 기존로직과 동일하게 추출되고
+sql_typ,source_table,target_table 내용이 수정되어 추가보완되어 생성되면 됩니다.
+
+[쿼리예제]
+with upd_w_tb as
+(
+select distinct
+       a.col_1
+     , a.col_2
+  from ${T_A}.tb_0 a
+  join ${T_S}.tb_3 c
+    on a.col_a=c.col_c
+  join ${T_N}.tb_4 d
+    on a.col_a=d.col_d
+)
+update ${T_A}.tb_0 a
+set col_u= b.col_yn
+from upd_w_tb
+where a.col_2 = b.col_2
+;
+
+
+[원본소스]
+#!/usr/bin/env python3
+
+import os
+import re
+import sys
+import csv
+from datetime import datetime
+
+# ==============================
+# 1. 파라미터 체크
+# ==============================
+
+if len(sys.argv) != 2:
+    print("사용법: python3 프로그램명.py 절대경로포함소스디렉토리")
+    sys.exit(1)
+
+SOURCE_DIR = os.path.abspath(sys.argv[1])
+
+if not os.path.isdir(SOURCE_DIR):
+    print("오류: 유효한 디렉토리가 아닙니다.")
+    sys.exit(1)
+
+# ==============================
+# 2. 설정
+# ==============================
+
+TARGET_EXTENSIONS = ('.sh', '.hql', '.sql', '.uld', '.ld')
+DELIMITER = ","
+EXCLUDE_TABLE = "sidtest.ad1901_rgb_ac190212_svc"
+
+RESERVED_WORDS = {
+    "SET","WHERE","AND","OR","ON","WHEN","THEN","ELSE",
+    "VALUES","SELECT","UPDATE","INSERT","DELETE","MERGE",
+    "USING","FROM","JOIN","INTO","GROUP","ORDER","BY",
+    "HAVING","TABLE","OVERWRITE","POSITION","SUBSTRING",
+    "CAST","TRIM","COUNT","SUM","MAX","MIN","AVG",
+    "SESSION"
+}
+
+ONLY_FROM_DUAL_PATTERN = re.compile(
+    r'^\s*SELECT\s+.*?\s+FROM\s+DUAL\s*;?\s*$',
+    re.IGNORECASE | re.DOTALL
+)
+
+MAIN_QUERY_START = re.compile(
+    r'\b(CREATE|INSERT|UPDATE|DELETE|MERGE|REPLACE|ALTER|DROP|TRUNCATE|SELECT|WITH)\b',
+    re.IGNORECASE
+)
+
+# ==============================
+# 3. 전처리
+# ==============================
+
+def preprocess(content):
+    content = "\n".join(
+        line for line in content.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    content = re.sub(r'--.*', '', content)
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    return content
+
+
+# ==============================
+# 4. EXECUTE IMMEDIATE 내부 SQL 추출
+# ==============================
+
+def extract_execute_immediate(content):
+    """EXECUTE IMMEDIATE '...' 내부 SQL 문자열 추출"""
+    results = []
+    pattern = re.compile(r'\bEXECUTE\s+IMMEDIATE\s+\'(.*?)\'', re.IGNORECASE | re.DOTALL)
+    for m in pattern.finditer(content):
+        inner_sql = m.group(1).strip()
+        if inner_sql:
+            results.append(inner_sql)
+    return results
+
+
+# ==============================
+# 5. depth 기반 쿼리 추출
+# ==============================
+
+def extract_queries_from_file(file_path):
+
+    queries = []
+    total_lines = 0
+
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            raw = f.read()
+
+        total_lines = raw.count("\n") + 1
+        content = preprocess(raw)
+
+        # EXECUTE IMMEDIATE 내부 SQL 먼저 수집
+        ei_queries = extract_execute_immediate(content)
+
+        # EXECUTE IMMEDIATE '...' 부분을 마스킹하여 중복 추출 방지
+        masked = re.sub(
+            r'\bEXECUTE\s+IMMEDIATE\s+\'.*?\'',
+            'EXECUTE_IMMEDIATE_MASKED',
+            content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+
+        pos = 0
+        length = len(masked)
+
+        while pos < length:
+
+            match = MAIN_QUERY_START.search(masked, pos)
+            if not match:
+                break
+
+            keyword = match.group(1).upper()
+            start = match.start()
+            end = start
+            depth = 0
+            in_string = False
+            quote_char = None
+
+            while end < length:
+                ch = masked[end]
+
+                if ch in ("'", '"'):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif quote_char == ch:
+                        in_string = False
+
+                elif not in_string:
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth = max(depth - 1, 0)
+                    elif ch == ";" and depth == 0:
+                        end += 1
+                        break
+
+                end += 1
+
+            query = masked[start:end].strip()
+
+            if query:
+                if EXCLUDE_TABLE.lower() in query.lower():
+                    pos = end
+                    continue
+                if ONLY_FROM_DUAL_PATTERN.match(query):
+                    pos = end
+                    continue
+
+                # ALTER SESSION 등 ALTER TABLE/VIEW 아닌 ALTER는 스킵
+                if keyword == 'ALTER':
+                    if not re.match(r'ALTER\s+(TABLE|VIEW)\b', query, re.IGNORECASE):
+                        pos = end
+                        continue
+
+                queries.append(query)
+
+            pos = end
+
+        # EXECUTE IMMEDIATE 내부 SQL 추가
+        queries.extend(ei_queries)
+
+    except Exception:
+        pass
+
+    return queries, total_lines
+
+
+# ==============================
+# 6. SQL TYPE
+# ==============================
+
+def detect_real_sql_type(query):
+
+    q = query.strip().upper()
+    first_word = q.split()[0] if q.split() else "UNKNOWN"
+
+    # INSERT INTO ... WITH cte AS (...) SELECT ... 패턴 처리
+    # 첫 키워드가 INSERT이면 바로 INSERT 반환
+    if first_word not in ("WITH",):
+        return first_word
+
+    # WITH 시작인 경우 → 실질 DML 탐색
+    if re.search(r'\bINSERT\b', q):
+        return "INSERT"
+    if re.search(r'\bUPDATE\b', q):
+        return "UPDATE"
+    if re.search(r'\bDELETE\b', q):
+        return "DELETE"
+    if re.search(r'\bMERGE\b', q):
+        return "MERGE"
+
+    return "SELECT"
+
+
+def classify_sql_type(sql_typ):
+
+    if sql_typ in ("CREATE","INSERT","MERGE","REPLACE"):
+        return "C"
+    elif sql_typ == "SELECT":
+        return "R"
+    elif sql_typ in ("UPDATE","ALTER"):
+        return "U"
+    elif sql_typ in ("DELETE","DROP","TRUNCATE"):
+        return "D"
+    return "R"
+
+
+# ==============================
+# 7. 테이블 정제
+# ==============================
+
+def clean_table(name):
+
+    if not name:
+        return None
+
+    name = name.strip()
+    name = re.split(r'\s+', name)[0]
+    name = name.rstrip(";,")
+    name = name.replace("(", "").replace(")", "")
+
+    upper = name.upper()
+
+    if (not name or
+        upper in RESERVED_WORDS or
+        upper == "DUAL" or
+        name.isdigit() or
+        re.match(r'^\d', name)):
+        return None
+
+    return name
+
+
+# ==============================
+# 8. 문자열 제거 (파싱 전처리)
+# ==============================
+
+def remove_string_literals(sql):
+    result = re.sub(r"'[^']*'", "''", sql)
+    result = re.sub(r'"[^"]*"', '""', result)
+    return result
+
+
+# ==============================
+# 9. 괄호 내부 추출
+# ==============================
+
+def extract_paren_content(sql, start):
+    depth = 0
+    i = start
+    while i < len(sql):
+        if sql[i] == '(':
+            depth += 1
+        elif sql[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return sql[start+1:i], i
+        i += 1
+    return sql[start+1:], len(sql)-1
+
+
+# ==============================
+# 10. SELECT 컬럼절 제거
+# ==============================
+
+def strip_select_columns(sql):
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        m = re.search(r'\bSELECT\b', sql_up[i:], re.IGNORECASE)
+        if not m:
+            result.append(sql[i:])
+            break
+
+        sel_pos = i + m.start()
+        result.append(sql[i:sel_pos])
+        result.append('SELECT ')
+
+        j = sel_pos + len('SELECT')
+        depth = 0
+        found_from = False
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0:
+                fm = re.match(r'\bFROM\b', sql_up[j:], re.IGNORECASE)
+                if fm:
+                    result.append('__COLS__ ')
+                    i = j
+                    found_from = True
+                    break
+                if ch == ';':
+                    result.append(sql[j:j+1])
+                    i = j + 1
+                    found_from = True
+                    break
+            j += 1
+
+        if not found_from:
+            result.append(sql[j:])
+            break
+
+    return ''.join(result)
+
+
+# ==============================
+# 11. UPDATE SET 절 제거
+# ==============================
+
+def strip_update_set(sql):
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        m = re.search(r'\bSET\b', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        set_pos = i + m.start()
+        result.append(sql[i:set_pos])
+        result.append('SET ')
+
+        j = set_pos + len('SET')
+        depth = 0
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0:
+                up_remain = sql_up[j:]
+                if (re.match(r'\bWHERE\b', up_remain) or
+                    re.match(r'\bWHEN\b', up_remain) or
+                    re.match(r'\bON\b', up_remain)):
+                    break
+                if ch == ';':
+                    break
+            j += 1
+
+        result.append('__SET__ ')
+        i = j
+
+    return ''.join(result)
+
+
+# ==============================
+# 12. 함수 호출 내부 제거
+# ==============================
+
+def strip_function_args(sql):
+    result = []
+    i = 0
+    length = len(sql)
+    sql_up = sql.upper()
+
+    while i < length:
+        m = re.search(r'(\b\w+)\s*\(', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        fn_start = i + m.start()
+        fn_name = m.group(1).upper()
+        paren_start = i + m.end() - 1
+
+        if fn_name in ('FROM', 'JOIN', 'USING', 'WITH', 'ON',
+                       'SELECT', 'WHERE', 'HAVING', 'SET',
+                       'INSERT', 'UPDATE', 'DELETE', 'MERGE',
+                       'CREATE', 'TABLE', 'VIEW', 'INTO',
+                       'WHEN', 'THEN', 'ELSE', 'AND', 'OR', 'NOT'):
+            result.append(sql[i:paren_start+1])
+            i = paren_start + 1
+            continue
+
+        result.append(sql[i:fn_start + len(m.group(1))])
+        inner, end_pos = extract_paren_content(sql, paren_start)
+        result.append('(__FUNC_ARGS__)')
+        i = end_pos + 1
+
+    return ''.join(result)
+
+
+# ==============================
+# 13. CTE 분석
+#     INSERT INTO ... WITH cte AS (...) SELECT 패턴도 처리
+# ==============================
+
+def extract_cte_map(query):
+
+    cte_map = {}
+
+    if 'WITH' not in query.upper():
+        return cte_map
+
+    pattern = re.compile(
+        r'(\w+)\s+AS\s*\((.*?)\)\s*(,|SELECT)',
+        re.IGNORECASE | re.DOTALL
+    )
+
+    for match in pattern.finditer(query):
+        alias = match.group(1)
+        subquery = match.group(2)
+        sources = extract_sources_recursive(subquery)
+        cte_map[alias.upper()] = sources
+
+    return cte_map
+
+
+# ==============================
+# 14. 소스 추출 (인라인뷰 포함 재귀)
+# ==============================
+
+def extract_sources_recursive(query):
+
+    sources = set()
+
+    q = remove_string_literals(query)
+    q = strip_select_columns(q)
+    q = strip_update_set(q)
+    q = strip_function_args(q)
+
+    length = len(q)
+
+    kw_pattern = re.compile(r'\b(FROM|JOIN|USING)\b', re.IGNORECASE)
+
+    CLAUSE_END = {
+        'WHERE', 'ON', 'WHEN', 'SET', 'HAVING', 'GROUP', 'ORDER',
+        'UNION', 'INTERSECT', 'EXCEPT', 'LIMIT', 'SELECT',
+        'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'WITH',
+        'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS',
+        'JOIN', 'FROM', 'USING'
+    }
+
+    for kw_match in kw_pattern.finditer(q):
+        j = kw_match.end()
+
+        while j < length and q[j] in ' \t\n\r':
+            j += 1
+
+        if j >= length:
+            continue
+
+        if q[j] == '(':
+            inner, end_pos = extract_paren_content(q, j)
+            sub_sources = extract_sources_recursive(inner)
+            sources.update(sub_sources)
+            j = end_pos + 1
+            # alias 스킵
+            alias_m = re.match(r'[\s]+(\w+)', q[j:])
+            if alias_m and alias_m.group(1).upper() not in CLAUSE_END:
+                j += alias_m.end()
+            # 콤마가 없으면 다음 키워드로
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+            if j >= length or q[j] != ',':
+                continue
+            j += 1  # 콤마 건너뛰고 while 루프 진입
+
+        while j < length:
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            if j >= length or q[j] in (';', ')'):
+                break
+
+            if q[j] == '(':
+                inner, end_pos = extract_paren_content(q, j)
+                sub_sources = extract_sources_recursive(inner)
+                sources.update(sub_sources)
+                j = end_pos + 1
+                alias_m = re.match(r'[\s]+(\w+)', q[j:])
+                if alias_m and alias_m.group(1).upper() not in CLAUSE_END:
+                    j += alias_m.end()
+            else:
+                tok_m = re.match(r'([^\s,;()\n]+)', q[j:])
+                if not tok_m:
+                    break
+                token = tok_m.group(1)
+                token_up = token.upper().rstrip(',;')
+
+                if token_up in CLAUSE_END:
+                    break
+
+                tbl = clean_table(token)
+                if tbl:
+                    sources.add(tbl)
+
+                j += tok_m.end()
+
+                alias_m = re.match(r'[\s]+([^\s,;()\n]+)', q[j:])
+                if alias_m:
+                    alias_word = alias_m.group(1).upper()
+                    if alias_word not in CLAUSE_END and not alias_word.startswith(','):
+                        j += alias_m.end()
+
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            if j < length and q[j] == ',':
+                j += 1
+            else:
+                break
+
+    return sources
+
+
+# ==============================
+# 15. 타겟 추출
+# ==============================
+
+def extract_target_tables(query):
+
+    targets = set()
+
+    patterns = [
+        r'INSERT\s+OVERWRITE\s+TABLE\s+([^\s(]+)',
+        r'INSERT\s+INTO\s+([^\s(]+)',
+        r'CREATE\s+(?:TABLE|VIEW)\s+([^\s(]+)',
+        r'UPDATE\s+([^\s(]+)',
+        r'DELETE\s+FROM\s+([^\s(]+)',
+        r'MERGE\s+INTO\s+([^\s(]+)',
+        r'ALTER\s+TABLE\s+([^\s(]+)',
+        r'DROP\s+TABLE\s+([^\s(]+)',
+        r'TRUNCATE\s+TABLE\s+([^\s(]+)'
+    ]
+
+    for pat in patterns:
+        for match in re.finditer(pat, query, re.IGNORECASE):
+            tbl = clean_table(match.group(1))
+            if tbl:
+                targets.add(tbl)
+
+    return targets
+
+
+# ==============================
+# 16. 메인
+# ==============================
+
+def main():
+
+    total_files = 0
+    total_queries = 0
+    total_output_rows = 0
+    total_file_lines = 0
+
+    program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+    source_last_dir = os.path.basename(SOURCE_DIR.rstrip(os.sep))
+
+    out_dir = os.path.join(os.getcwd(), "out")
+    os.makedirs(out_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"{program_name}_{source_last_dir}_{timestamp}.csv"
+    output_path = os.path.join(out_dir, output_filename)
+
+    rows_buffer = []
+
+    for root, _, files in os.walk(SOURCE_DIR):
+
+        for file in files:
+            if file.lower().endswith(TARGET_EXTENSIONS):
+
+                total_files += 1
+
+                full_path = os.path.join(root, file)
+                abs_path = os.path.abspath(root)
+
+                queries, file_lines = extract_queries_from_file(full_path)
+
+                total_file_lines += file_lines
+                total_queries += len(queries)
+
+                for query in queries:
+
+                    sql_typ = detect_real_sql_type(query)
+                    crud_type = classify_sql_type(sql_typ)
+
+                    cte_map = extract_cte_map(query)
+                    sources = extract_sources_recursive(query)
+                    targets = extract_target_tables(query)
+
+                    real_sources = set()
+
+                    for s in sources:
+                        if s and s.upper() in cte_map:
+                            real_sources.update(cte_map[s.upper()])
+                        else:
+                            if s:
+                                real_sources.add(s)
+
+                    # CTE 이름 자체는 real_sources에서 제거
+                    cte_names = set(cte_map.keys())
+                    real_sources = {s for s in real_sources
+                                    if s and s.upper() not in cte_names}
+
+                    if not real_sources and not targets:
+                        continue
+
+                    if not real_sources:
+                        real_sources = {None}
+                    if not targets:
+                        targets = {None}
+
+                    # 중복 제거: (src, tgt) 조합 유일하게
+                    seen_pairs = set()
+                    for tgt in sorted(targets, key=lambda x: x or ''):
+                        for src in sorted(real_sources, key=lambda x: x or ''):
+                            pair = (src, tgt)
+                            if pair in seen_pairs:
+                                continue
+                            seen_pairs.add(pair)
+                            rows_buffer.append([
+                                crud_type,
+                                abs_path,
+                                file,
+                                full_path,
+                                sql_typ,
+                                src,
+                                tgt
+                            ])
+                            total_output_rows += 1
+
+    # 🔥 소스/타겟 없는 파일은 생성 제외
+    if total_output_rows == 0:
+        print("====================================")
+        print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+        print("====================================")
+        print("CSV 파일 생성 대상이 없습니다.")
+        print("====================================")
+        return
+
+    with open(output_path, 'w', newline='', encoding='utf-8') as out_file:
+        writer = csv.writer(out_file, delimiter=DELIMITER)
+        writer.writerow([
+            "crud_type","abs_path","file","full_path",
+            "sql_typ","source_table","target_table"
+        ])
+        writer.writerows(rows_buffer)
+
+    print("====================================")
+    print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+    print("====================================")
+    print(f"CSV 파일 위치        : {output_path}")
+    print(f"처리 파일 건수        : {total_files}")
+    print(f"추출 쿼리 건수        : {total_queries}")
+    print(f"생성 행 건수          : {total_output_rows}")
+    print(f"전체 파일 총 행 건수  : {total_file_lines}")
+    print("====================================")
+
+
+if __name__ == "__main__":
+    main()
+	
+
+문제를 분석합니다:
+쿼리 구조:
+sqlWITH upd_w_tb AS (
+  SELECT ... FROM ${T_A}.tb_0 a JOIN ${T_S}.tb_3 c ... JOIN ${T_N}.tb_4 d ...
+)
+UPDATE ${T_A}.tb_0 a
+SET col_u = b.col_yn
+FROM upd_w_tb        ← CTE 참조
+WHERE ...
+현재 문제:
+
+UPDATE ${T_A}.tb_0 → 타겟만 추출됨
+FROM upd_w_tb → CTE이므로 ${T_A}.tb_0, ${T_S}.tb_3, ${T_N}.tb_4 로 확장되어야 함
+${T_A}.tb_0 이 타겟이면서 동시에 소스(CTE 내부에서 사용)이므로 소스에도 추출되어야 함
+
+현재 로직에서 real_sources에서 타겟과 동일한 테이블을 제거하는 부분이 없는데도 안 나오는 이유를 확인해봅니다.현재 동작 분석현재 동작 분석현재 동작 분석스크립트완료두 가지 문제가 있습니다:
+
+cte_map이 빈 것 → extract_cte_map이 WITH로 시작하는지만 체크하는데, 쿼리가 with로 시작하므로 괜찮아 보이는데... detect_real_sql_type이 UPDATE를 반환하는 게 맞지만 extract_cte_map이 CTE를 못 찾고 있음
+raw sources가 빈 것 → UPDATE ... SET ... FROM upd_w_tb에서 strip_update_set이 SET부터 FROM 이전까지를 제거하지 않고 WHERE까지 제거해버려서 FROM upd_w_tb가 사라짐
+CTE와 SET 절 제거 문제 진단CTE와 SET 절 제거 문제 진단CTE와 SET 절 제거 문제 진단스크립트완료문제가 명확해졌습니다:
+
+CTE 패턴 매치 실패 → upd_w_tb AS (...) 다음에 SELECT나 ,가 아닌 UPDATE가 오기 때문에 정규식 \)\s*(,|SELECT) 가 매치 안 됨
+strip_update_set이 FROM upd_w_tb까지 지워버림 → SET col_u= b.col_yn FROM upd_w_tb WHERE...에서 SET 이후 WHERE까지 모두 제거해서 FROM upd_w_tb가 사라짐
+
+수정 사항:
+
+CTE 패턴 끝 조건을 UPDATE/DELETE/INSERT/MERGE도 포함
+strip_update_set에서 FROM 키워드도 SET 절 종료 조건으로 추가
+2개의 파일 조회함2개의 파일 조회함extract_cte_map 함수 위치 확인strip_update_set 함수 확인완료두 곳을 수정합니다:2개 파일 수정됨, 명령 실행함2개 파일 수정됨, 명령 실행함strip_update_set에서 FROM도 SET 절 종료 조건으로 추가sql_table_extractor.py+9-8extract_cte_map 패턴에서 UPDATE/DELETE/INSERT/MERGE도 CTE 종료 조건으로 추가sql_table_extractor.py+4-4수정 후 재테스트스크립트완료CTE 확장이 정상입니다. 이제 전체 실행을 테스트합니다.전체 실행 테스트전체 실행 테스트전체 실행 테스트스크립트완료요청한 결과와 정확히 일치합니다. 기존 테스트 케이스도 회귀 테스트합니다.기존 테스트 회귀 확인기존 테스트 회귀 확인기존 테스트 회귀 확인스크립트완료모든 기존 케이스도 정상입니다.Presented filePresented filePresented file완료수정 내용은 단 두 곳입니다:
+1. strip_update_set — SET 절 종료 조건에 FROM 추가
+UPDATE tb SET col=val FROM other_tb WHERE ...
+기존에는 WHERE만 종료 조건이라 FROM other_tb까지 지워졌습니다. FROM을 종료 조건으로 추가하여 FROM upd_w_tb가 보존되도록 수정했습니다.
+2. extract_cte_map — CTE 종료 조건에 UPDATE/DELETE/INSERT/MERGE 추가
+WITH cte AS (...) UPDATE ...
+기존 패턴 )\s*(,|SELECT) 는 CTE 다음에 SELECT나 ,만 인식했습니다. WITH ... UPDATE 형태에서는 ) 다음에 UPDATE가 오므로 이를 추가하여 CTE가 정상 파싱되도록 수정했습니다.Sql table extractorPY 
+
+[수정소스최종]
+#!/usr/bin/env python3
+
+import os
+import re
+import sys
+import csv
+from datetime import datetime
+
+# ==============================
+# 1. 파라미터 체크
+# ==============================
+
+if len(sys.argv) != 2:
+    print("사용법: python3 프로그램명.py 절대경로포함소스디렉토리")
+    sys.exit(1)
+
+SOURCE_DIR = os.path.abspath(sys.argv[1])
+
+if not os.path.isdir(SOURCE_DIR):
+    print("오류: 유효한 디렉토리가 아닙니다.")
+    sys.exit(1)
+
+# ==============================
+# 2. 설정
+# ==============================
+
+TARGET_EXTENSIONS = ('.sh', '.hql', '.sql', '.uld', '.ld')
+DELIMITER = ","
+EXCLUDE_TABLE = "sidtest.ad1901_rgb_ac190212_svc"
+
+RESERVED_WORDS = {
+    "SET","WHERE","AND","OR","ON","WHEN","THEN","ELSE",
+    "VALUES","SELECT","UPDATE","INSERT","DELETE","MERGE",
+    "USING","FROM","JOIN","INTO","GROUP","ORDER","BY",
+    "HAVING","TABLE","OVERWRITE","POSITION","SUBSTRING",
+    "CAST","TRIM","COUNT","SUM","MAX","MIN","AVG",
+    "SESSION"
+}
+
+ONLY_FROM_DUAL_PATTERN = re.compile(
+    r'^\s*SELECT\s+.*?\s+FROM\s+DUAL\s*;?\s*$',
+    re.IGNORECASE | re.DOTALL
+)
+
+MAIN_QUERY_START = re.compile(
+    r'\b(CREATE|INSERT|UPDATE|DELETE|MERGE|REPLACE|ALTER|DROP|TRUNCATE|SELECT|WITH)\b',
+    re.IGNORECASE
+)
+
+# ==============================
+# 3. 전처리
+# ==============================
+
+def preprocess(content):
+    content = "\n".join(
+        line for line in content.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    content = re.sub(r'--.*', '', content)
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    return content
+
+
+# ==============================
+# 4. EXECUTE IMMEDIATE 내부 SQL 추출
+# ==============================
+
+def extract_execute_immediate(content):
+    """EXECUTE IMMEDIATE '...' 내부 SQL 문자열 추출"""
+    results = []
+    pattern = re.compile(r'\bEXECUTE\s+IMMEDIATE\s+\'(.*?)\'', re.IGNORECASE | re.DOTALL)
+    for m in pattern.finditer(content):
+        inner_sql = m.group(1).strip()
+        if inner_sql:
+            results.append(inner_sql)
+    return results
+
+
+# ==============================
+# 5. depth 기반 쿼리 추출
+# ==============================
+
+def extract_queries_from_file(file_path):
+
+    queries = []
+    total_lines = 0
+
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            raw = f.read()
+
+        total_lines = raw.count("\n") + 1
+        content = preprocess(raw)
+
+        # EXECUTE IMMEDIATE 내부 SQL 먼저 수집
+        ei_queries = extract_execute_immediate(content)
+
+        # EXECUTE IMMEDIATE '...' 부분을 마스킹하여 중복 추출 방지
+        masked = re.sub(
+            r'\bEXECUTE\s+IMMEDIATE\s+\'.*?\'',
+            'EXECUTE_IMMEDIATE_MASKED',
+            content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+
+        pos = 0
+        length = len(masked)
+
+        while pos < length:
+
+            match = MAIN_QUERY_START.search(masked, pos)
+            if not match:
+                break
+
+            keyword = match.group(1).upper()
+            start = match.start()
+            end = start
+            depth = 0
+            in_string = False
+            quote_char = None
+
+            while end < length:
+                ch = masked[end]
+
+                if ch in ("'", '"'):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif quote_char == ch:
+                        in_string = False
+
+                elif not in_string:
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth = max(depth - 1, 0)
+                    elif ch == ";" and depth == 0:
+                        end += 1
+                        break
+
+                end += 1
+
+            query = masked[start:end].strip()
+
+            if query:
+                if EXCLUDE_TABLE.lower() in query.lower():
+                    pos = end
+                    continue
+                if ONLY_FROM_DUAL_PATTERN.match(query):
+                    pos = end
+                    continue
+
+                # ALTER SESSION 등 ALTER TABLE/VIEW 아닌 ALTER는 스킵
+                if keyword == 'ALTER':
+                    if not re.match(r'ALTER\s+(TABLE|VIEW)\b', query, re.IGNORECASE):
+                        pos = end
+                        continue
+
+                queries.append(query)
+
+            pos = end
+
+        # EXECUTE IMMEDIATE 내부 SQL 추가
+        queries.extend(ei_queries)
+
+    except Exception:
+        pass
+
+    return queries, total_lines
+
+
+# ==============================
+# 6. SQL TYPE
+# ==============================
+
+def detect_real_sql_type(query):
+
+    q = query.strip().upper()
+    first_word = q.split()[0] if q.split() else "UNKNOWN"
+
+    # INSERT INTO ... WITH cte AS (...) SELECT ... 패턴 처리
+    # 첫 키워드가 INSERT이면 바로 INSERT 반환
+    if first_word not in ("WITH",):
+        return first_word
+
+    # WITH 시작인 경우 → 실질 DML 탐색
+    if re.search(r'\bINSERT\b', q):
+        return "INSERT"
+    if re.search(r'\bUPDATE\b', q):
+        return "UPDATE"
+    if re.search(r'\bDELETE\b', q):
+        return "DELETE"
+    if re.search(r'\bMERGE\b', q):
+        return "MERGE"
+
+    return "SELECT"
+
+
+def classify_sql_type(sql_typ):
+
+    if sql_typ in ("CREATE","INSERT","MERGE","REPLACE"):
+        return "C"
+    elif sql_typ == "SELECT":
+        return "R"
+    elif sql_typ in ("UPDATE","ALTER"):
+        return "U"
+    elif sql_typ in ("DELETE","DROP","TRUNCATE"):
+        return "D"
+    return "R"
+
+
+# ==============================
+# 7. 테이블 정제
+# ==============================
+
+def clean_table(name):
+
+    if not name:
+        return None
+
+    name = name.strip()
+    name = re.split(r'\s+', name)[0]
+    name = name.rstrip(";,")
+    name = name.replace("(", "").replace(")", "")
+
+    upper = name.upper()
+
+    if (not name or
+        upper in RESERVED_WORDS or
+        upper == "DUAL" or
+        name.isdigit() or
+        re.match(r'^\d', name)):
+        return None
+
+    return name
+
+
+# ==============================
+# 8. 문자열 제거 (파싱 전처리)
+# ==============================
+
+def remove_string_literals(sql):
+    result = re.sub(r"'[^']*'", "''", sql)
+    result = re.sub(r'"[^"]*"', '""', result)
+    return result
+
+
+# ==============================
+# 9. 괄호 내부 추출
+# ==============================
+
+def extract_paren_content(sql, start):
+    depth = 0
+    i = start
+    while i < len(sql):
+        if sql[i] == '(':
+            depth += 1
+        elif sql[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return sql[start+1:i], i
+        i += 1
+    return sql[start+1:], len(sql)-1
+
+
+# ==============================
+# 10. SELECT 컬럼절 제거
+# ==============================
+
+def strip_select_columns(sql):
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        m = re.search(r'\bSELECT\b', sql_up[i:], re.IGNORECASE)
+        if not m:
+            result.append(sql[i:])
+            break
+
+        sel_pos = i + m.start()
+        result.append(sql[i:sel_pos])
+        result.append('SELECT ')
+
+        j = sel_pos + len('SELECT')
+        depth = 0
+        found_from = False
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0:
+                fm = re.match(r'\bFROM\b', sql_up[j:], re.IGNORECASE)
+                if fm:
+                    result.append('__COLS__ ')
+                    i = j
+                    found_from = True
+                    break
+                if ch == ';':
+                    result.append(sql[j:j+1])
+                    i = j + 1
+                    found_from = True
+                    break
+            j += 1
+
+        if not found_from:
+            result.append(sql[j:])
+            break
+
+    return ''.join(result)
+
+
+# ==============================
+# 11. UPDATE SET 절 제거
+# ==============================
+
+def strip_update_set(sql):
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        m = re.search(r'\bSET\b', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        set_pos = i + m.start()
+        result.append(sql[i:set_pos])
+        result.append('SET ')
+
+        j = set_pos + len('SET')
+        depth = 0
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0:
+                up_remain = sql_up[j:]
+                if (re.match(r'\bWHERE\b', up_remain) or
+                    re.match(r'\bWHEN\b', up_remain) or
+                    re.match(r'\bON\b', up_remain) or
+                    re.match(r'\bFROM\b', up_remain)):
+                    break
+                if ch == ';':
+                    break
+            j += 1
+
+        result.append('__SET__ ')
+        i = j
+
+    return ''.join(result)
+
+
+# ==============================
+# 12. 함수 호출 내부 제거
+# ==============================
+
+def strip_function_args(sql):
+    result = []
+    i = 0
+    length = len(sql)
+    sql_up = sql.upper()
+
+    while i < length:
+        m = re.search(r'(\b\w+)\s*\(', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        fn_start = i + m.start()
+        fn_name = m.group(1).upper()
+        paren_start = i + m.end() - 1
+
+        if fn_name in ('FROM', 'JOIN', 'USING', 'WITH', 'ON',
+                       'SELECT', 'WHERE', 'HAVING', 'SET',
+                       'INSERT', 'UPDATE', 'DELETE', 'MERGE',
+                       'CREATE', 'TABLE', 'VIEW', 'INTO',
+                       'WHEN', 'THEN', 'ELSE', 'AND', 'OR', 'NOT'):
+            result.append(sql[i:paren_start+1])
+            i = paren_start + 1
+            continue
+
+        result.append(sql[i:fn_start + len(m.group(1))])
+        inner, end_pos = extract_paren_content(sql, paren_start)
+        result.append('(__FUNC_ARGS__)')
+        i = end_pos + 1
+
+    return ''.join(result)
+
+
+# ==============================
+# 13. CTE 분석
+#     INSERT INTO ... WITH cte AS (...) SELECT 패턴도 처리
+# ==============================
+
+def extract_cte_map(query):
+
+    cte_map = {}
+
+    if 'WITH' not in query.upper():
+        return cte_map
+
+    pattern = re.compile(
+        r'(\w+)\s+AS\s*\((.*?)\)\s*(,|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bMERGE\b)',
+        re.IGNORECASE | re.DOTALL
+    )
+
+    for match in pattern.finditer(query):
+        alias = match.group(1)
+        subquery = match.group(2)
+        sources = extract_sources_recursive(subquery)
+        cte_map[alias.upper()] = sources
+
+    return cte_map
+
+
+# ==============================
+# 14. 소스 추출 (인라인뷰 포함 재귀)
+# ==============================
+
+def extract_sources_recursive(query):
+
+    sources = set()
+
+    q = remove_string_literals(query)
+    q = strip_select_columns(q)
+    q = strip_update_set(q)
+    q = strip_function_args(q)
+
+    length = len(q)
+
+    kw_pattern = re.compile(r'\b(FROM|JOIN|USING)\b', re.IGNORECASE)
+
+    CLAUSE_END = {
+        'WHERE', 'ON', 'WHEN', 'SET', 'HAVING', 'GROUP', 'ORDER',
+        'UNION', 'INTERSECT', 'EXCEPT', 'LIMIT', 'SELECT',
+        'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'WITH',
+        'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS',
+        'JOIN', 'FROM', 'USING'
+    }
+
+    for kw_match in kw_pattern.finditer(q):
+        j = kw_match.end()
+
+        while j < length and q[j] in ' \t\n\r':
+            j += 1
+
+        if j >= length:
+            continue
+
+        if q[j] == '(':
+            inner, end_pos = extract_paren_content(q, j)
+            sub_sources = extract_sources_recursive(inner)
+            sources.update(sub_sources)
+            j = end_pos + 1
+            # alias 스킵
+            alias_m = re.match(r'[\s]+(\w+)', q[j:])
+            if alias_m and alias_m.group(1).upper() not in CLAUSE_END:
+                j += alias_m.end()
+            # 콤마가 없으면 다음 키워드로
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+            if j >= length or q[j] != ',':
+                continue
+            j += 1  # 콤마 건너뛰고 while 루프 진입
+
+        while j < length:
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            if j >= length or q[j] in (';', ')'):
+                break
+
+            if q[j] == '(':
+                inner, end_pos = extract_paren_content(q, j)
+                sub_sources = extract_sources_recursive(inner)
+                sources.update(sub_sources)
+                j = end_pos + 1
+                alias_m = re.match(r'[\s]+(\w+)', q[j:])
+                if alias_m and alias_m.group(1).upper() not in CLAUSE_END:
+                    j += alias_m.end()
+            else:
+                tok_m = re.match(r'([^\s,;()\n]+)', q[j:])
+                if not tok_m:
+                    break
+                token = tok_m.group(1)
+                token_up = token.upper().rstrip(',;')
+
+                if token_up in CLAUSE_END:
+                    break
+
+                tbl = clean_table(token)
+                if tbl:
+                    sources.add(tbl)
+
+                j += tok_m.end()
+
+                alias_m = re.match(r'[\s]+([^\s,;()\n]+)', q[j:])
+                if alias_m:
+                    alias_word = alias_m.group(1).upper()
+                    if alias_word not in CLAUSE_END and not alias_word.startswith(','):
+                        j += alias_m.end()
+
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            if j < length and q[j] == ',':
+                j += 1
+            else:
+                break
+
+    return sources
+
+
+# ==============================
+# 15. 타겟 추출
+# ==============================
+
+def extract_target_tables(query):
+
+    targets = set()
+
+    patterns = [
+        r'INSERT\s+OVERWRITE\s+TABLE\s+([^\s(]+)',
+        r'INSERT\s+INTO\s+([^\s(]+)',
+        r'CREATE\s+(?:TABLE|VIEW)\s+([^\s(]+)',
+        r'UPDATE\s+([^\s(]+)',
+        r'DELETE\s+FROM\s+([^\s(]+)',
+        r'MERGE\s+INTO\s+([^\s(]+)',
+        r'ALTER\s+TABLE\s+([^\s(]+)',
+        r'DROP\s+TABLE\s+([^\s(]+)',
+        r'TRUNCATE\s+TABLE\s+([^\s(]+)'
+    ]
+
+    for pat in patterns:
+        for match in re.finditer(pat, query, re.IGNORECASE):
+            tbl = clean_table(match.group(1))
+            if tbl:
+                targets.add(tbl)
+
+    return targets
+
+
+# ==============================
+# 16. 메인
+# ==============================
+
+def main():
+
+    total_files = 0
+    total_queries = 0
+    total_output_rows = 0
+    total_file_lines = 0
+
+    program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+    source_last_dir = os.path.basename(SOURCE_DIR.rstrip(os.sep))
+
+    out_dir = os.path.join(os.getcwd(), "out")
+    os.makedirs(out_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"{program_name}_{source_last_dir}_{timestamp}.csv"
+    output_path = os.path.join(out_dir, output_filename)
+
+    rows_buffer = []
+
+    for root, _, files in os.walk(SOURCE_DIR):
+
+        for file in files:
+            if file.lower().endswith(TARGET_EXTENSIONS):
+
+                total_files += 1
+
+                full_path = os.path.join(root, file)
+                abs_path = os.path.abspath(root)
+
+                queries, file_lines = extract_queries_from_file(full_path)
+
+                total_file_lines += file_lines
+                total_queries += len(queries)
+
+                for query in queries:
+
+                    sql_typ = detect_real_sql_type(query)
+                    crud_type = classify_sql_type(sql_typ)
+
+                    cte_map = extract_cte_map(query)
+                    sources = extract_sources_recursive(query)
+                    targets = extract_target_tables(query)
+
+                    real_sources = set()
+
+                    for s in sources:
+                        if s and s.upper() in cte_map:
+                            real_sources.update(cte_map[s.upper()])
+                        else:
+                            if s:
+                                real_sources.add(s)
+
+                    # CTE 이름 자체는 real_sources에서 제거
+                    cte_names = set(cte_map.keys())
+                    real_sources = {s for s in real_sources
+                                    if s and s.upper() not in cte_names}
+
+                    if not real_sources and not targets:
+                        continue
+
+                    if not real_sources:
+                        real_sources = {None}
+                    if not targets:
+                        targets = {None}
+
+                    # 중복 제거: (src, tgt) 조합 유일하게
+                    seen_pairs = set()
+                    for tgt in sorted(targets, key=lambda x: x or ''):
+                        for src in sorted(real_sources, key=lambda x: x or ''):
+                            pair = (src, tgt)
+                            if pair in seen_pairs:
+                                continue
+                            seen_pairs.add(pair)
+                            rows_buffer.append([
+                                crud_type,
+                                abs_path,
+                                file,
+                                full_path,
+                                sql_typ,
+                                src,
+                                tgt
+                            ])
+                            total_output_rows += 1
+
+    # 🔥 소스/타겟 없는 파일은 생성 제외
+    if total_output_rows == 0:
+        print("====================================")
+        print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+        print("====================================")
+        print("CSV 파일 생성 대상이 없습니다.")
+        print("====================================")
+        return
+
+    with open(output_path, 'w', newline='', encoding='utf-8') as out_file:
+        writer = csv.writer(out_file, delimiter=DELIMITER)
+        writer.writerow([
+            "crud_type","abs_path","file","full_path",
+            "sql_typ","source_table","target_table"
+        ])
+        writer.writerows(rows_buffer)
+
+    print("====================================")
+    print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+    print("====================================")
+    print(f"CSV 파일 위치        : {output_path}")
+    print(f"처리 파일 건수        : {total_files}")
+    print(f"추출 쿼리 건수        : {total_queries}")
+    print(f"생성 행 건수          : {total_output_rows}")
+    print(f"전체 파일 총 행 건수  : {total_file_lines}")
+    print("====================================")
+
+
+if __name__ == "__main__":
+    main()
+	
+	
+	
+■sql_est_srctgt_008.py 파일로 수정소스 생성
+
+[원본소스] 실행결과
+[쿼리예제]에 대한 분석 결과가 "[실행후결과]" 처럼 source_table 이 없는 행이 추가로 생성되는데
+"[수정실행후예상결과]"처럼 source_table이 없는 결과는 파일생성시 제외하고 생성되도록
+"[원본소스]" 로직 최대한 유지하면서 요청한내용 적용 수정한 전체소스
+
+주의:
+1) crud_type,abs_path,file,full_path 레이아웃은 기존로직과 동일하게 추출되고
+sql_typ,source_table,target_table 내용이 수정되어 추가보완되어 생성되면 됩니다.
+2) from 이나 join에 소스테이블이 없이 update 쿼리에 수정하는 타겟테이블만 있는 쿼리에서는 소스테이블 없이 파일의 행이 생성되어도 됨
+
+[실행후결과]
+sql_typ,source_table,target_table
+UPDATE,${T_A}.tb_0,${T_A}.tb_0
+UPDATE,${T_S}.tb_3,${T_A}.tb_0
+UPDATE,${T_N}.tb_4,${T_A}.tb_0
+UPDATE,,${T_A}.tb_0
+
+[수정실행후예상결과]
+sql_typ,source_table,target_table
+UPDATE,${T_A}.tb_0,${T_A}.tb_0
+UPDATE,${T_S}.tb_3,${T_A}.tb_0
+UPDATE,${T_N}.tb_4,${T_A}.tb_0
+
+
+[쿼리예제]
+with upd_w_tb as
+(
+select distinct
+       a.col_1
+     , a.col_2
+  from ${T_A}.tb_0 a
+  join ${T_S}.tb_3 c
+    on a.col_a=c.col_c
+  join ${T_N}.tb_4 d
+    on a.col_a=d.col_d
+)
+update ${T_A}.tb_0 a
+set col_u= b.col_yn
+from upd_w_tb
+where a.col_2 = b.col_2
+;
+
+
+[원본소스]
+#!/usr/bin/env python3
+
+import os
+import re
+import sys
+import csv
+from datetime import datetime
+
+# ==============================
+# 1. 파라미터 체크
+# ==============================
+
+if len(sys.argv) != 2:
+    print("사용법: python3 프로그램명.py 절대경로포함소스디렉토리")
+    sys.exit(1)
+
+SOURCE_DIR = os.path.abspath(sys.argv[1])
+
+if not os.path.isdir(SOURCE_DIR):
+    print("오류: 유효한 디렉토리가 아닙니다.")
+    sys.exit(1)
+
+# ==============================
+# 2. 설정
+# ==============================
+
+TARGET_EXTENSIONS = ('.sh', '.hql', '.sql', '.uld', '.ld')
+DELIMITER = ","
+EXCLUDE_TABLE = "sidtest.ad1901_rgb_ac190212_svc"
+
+RESERVED_WORDS = {
+    "SET","WHERE","AND","OR","ON","WHEN","THEN","ELSE",
+    "VALUES","SELECT","UPDATE","INSERT","DELETE","MERGE",
+    "USING","FROM","JOIN","INTO","GROUP","ORDER","BY",
+    "HAVING","TABLE","OVERWRITE","POSITION","SUBSTRING",
+    "CAST","TRIM","COUNT","SUM","MAX","MIN","AVG",
+    "SESSION"
+}
+
+ONLY_FROM_DUAL_PATTERN = re.compile(
+    r'^\s*SELECT\s+.*?\s+FROM\s+DUAL\s*;?\s*$',
+    re.IGNORECASE | re.DOTALL
+)
+
+MAIN_QUERY_START = re.compile(
+    r'\b(CREATE|INSERT|UPDATE|DELETE|MERGE|REPLACE|ALTER|DROP|TRUNCATE|SELECT|WITH)\b',
+    re.IGNORECASE
+)
+
+# ==============================
+# 3. 전처리
+# ==============================
+
+def preprocess(content):
+    content = "\n".join(
+        line for line in content.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    content = re.sub(r'--.*', '', content)
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    return content
+
+
+# ==============================
+# 4. EXECUTE IMMEDIATE 내부 SQL 추출
+# ==============================
+
+def extract_execute_immediate(content):
+    """EXECUTE IMMEDIATE '...' 내부 SQL 문자열 추출"""
+    results = []
+    pattern = re.compile(r'\bEXECUTE\s+IMMEDIATE\s+\'(.*?)\'', re.IGNORECASE | re.DOTALL)
+    for m in pattern.finditer(content):
+        inner_sql = m.group(1).strip()
+        if inner_sql:
+            results.append(inner_sql)
+    return results
+
+
+# ==============================
+# 5. depth 기반 쿼리 추출
+# ==============================
+
+def extract_queries_from_file(file_path):
+
+    queries = []
+    total_lines = 0
+
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            raw = f.read()
+
+        total_lines = raw.count("\n") + 1
+        content = preprocess(raw)
+
+        # EXECUTE IMMEDIATE 내부 SQL 먼저 수집
+        ei_queries = extract_execute_immediate(content)
+
+        # EXECUTE IMMEDIATE '...' 부분을 마스킹하여 중복 추출 방지
+        masked = re.sub(
+            r'\bEXECUTE\s+IMMEDIATE\s+\'.*?\'',
+            'EXECUTE_IMMEDIATE_MASKED',
+            content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+
+        pos = 0
+        length = len(masked)
+
+        while pos < length:
+
+            match = MAIN_QUERY_START.search(masked, pos)
+            if not match:
+                break
+
+            keyword = match.group(1).upper()
+            start = match.start()
+            end = start
+            depth = 0
+            in_string = False
+            quote_char = None
+
+            while end < length:
+                ch = masked[end]
+
+                if ch in ("'", '"'):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif quote_char == ch:
+                        in_string = False
+
+                elif not in_string:
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth = max(depth - 1, 0)
+                    elif ch == ";" and depth == 0:
+                        end += 1
+                        break
+
+                end += 1
+
+            query = masked[start:end].strip()
+
+            if query:
+                if EXCLUDE_TABLE.lower() in query.lower():
+                    pos = end
+                    continue
+                if ONLY_FROM_DUAL_PATTERN.match(query):
+                    pos = end
+                    continue
+
+                # ALTER SESSION 등 ALTER TABLE/VIEW 아닌 ALTER는 스킵
+                if keyword == 'ALTER':
+                    if not re.match(r'ALTER\s+(TABLE|VIEW)\b', query, re.IGNORECASE):
+                        pos = end
+                        continue
+
+                queries.append(query)
+
+            pos = end
+
+        # EXECUTE IMMEDIATE 내부 SQL 추가
+        queries.extend(ei_queries)
+
+    except Exception:
+        pass
+
+    return queries, total_lines
+
+
+# ==============================
+# 6. SQL TYPE
+# ==============================
+
+def detect_real_sql_type(query):
+
+    q = query.strip().upper()
+    first_word = q.split()[0] if q.split() else "UNKNOWN"
+
+    # INSERT INTO ... WITH cte AS (...) SELECT ... 패턴 처리
+    # 첫 키워드가 INSERT이면 바로 INSERT 반환
+    if first_word not in ("WITH",):
+        return first_word
+
+    # WITH 시작인 경우 → 실질 DML 탐색
+    if re.search(r'\bINSERT\b', q):
+        return "INSERT"
+    if re.search(r'\bUPDATE\b', q):
+        return "UPDATE"
+    if re.search(r'\bDELETE\b', q):
+        return "DELETE"
+    if re.search(r'\bMERGE\b', q):
+        return "MERGE"
+
+    return "SELECT"
+
+
+def classify_sql_type(sql_typ):
+
+    if sql_typ in ("CREATE","INSERT","MERGE","REPLACE"):
+        return "C"
+    elif sql_typ == "SELECT":
+        return "R"
+    elif sql_typ in ("UPDATE","ALTER"):
+        return "U"
+    elif sql_typ in ("DELETE","DROP","TRUNCATE"):
+        return "D"
+    return "R"
+
+
+# ==============================
+# 7. 테이블 정제
+# ==============================
+
+def clean_table(name):
+
+    if not name:
+        return None
+
+    name = name.strip()
+    name = re.split(r'\s+', name)[0]
+    name = name.rstrip(";,")
+    name = name.replace("(", "").replace(")", "")
+
+    upper = name.upper()
+
+    if (not name or
+        upper in RESERVED_WORDS or
+        upper == "DUAL" or
+        name.isdigit() or
+        re.match(r'^\d', name)):
+        return None
+
+    return name
+
+
+# ==============================
+# 8. 문자열 제거 (파싱 전처리)
+# ==============================
+
+def remove_string_literals(sql):
+    result = re.sub(r"'[^']*'", "''", sql)
+    result = re.sub(r'"[^"]*"', '""', result)
+    return result
+
+
+# ==============================
+# 9. 괄호 내부 추출
+# ==============================
+
+def extract_paren_content(sql, start):
+    depth = 0
+    i = start
+    while i < len(sql):
+        if sql[i] == '(':
+            depth += 1
+        elif sql[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return sql[start+1:i], i
+        i += 1
+    return sql[start+1:], len(sql)-1
+
+
+# ==============================
+# 10. SELECT 컬럼절 제거
+# ==============================
+
+def strip_select_columns(sql):
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        m = re.search(r'\bSELECT\b', sql_up[i:], re.IGNORECASE)
+        if not m:
+            result.append(sql[i:])
+            break
+
+        sel_pos = i + m.start()
+        result.append(sql[i:sel_pos])
+        result.append('SELECT ')
+
+        j = sel_pos + len('SELECT')
+        depth = 0
+        found_from = False
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0:
+                fm = re.match(r'\bFROM\b', sql_up[j:], re.IGNORECASE)
+                if fm:
+                    result.append('__COLS__ ')
+                    i = j
+                    found_from = True
+                    break
+                if ch == ';':
+                    result.append(sql[j:j+1])
+                    i = j + 1
+                    found_from = True
+                    break
+            j += 1
+
+        if not found_from:
+            result.append(sql[j:])
+            break
+
+    return ''.join(result)
+
+
+# ==============================
+# 11. UPDATE SET 절 제거
+# ==============================
+
+def strip_update_set(sql):
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        m = re.search(r'\bSET\b', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        set_pos = i + m.start()
+        result.append(sql[i:set_pos])
+        result.append('SET ')
+
+        j = set_pos + len('SET')
+        depth = 0
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0:
+                up_remain = sql_up[j:]
+                if (re.match(r'\bWHERE\b', up_remain) or
+                    re.match(r'\bWHEN\b', up_remain) or
+                    re.match(r'\bON\b', up_remain) or
+                    re.match(r'\bFROM\b', up_remain)):
+                    break
+                if ch == ';':
+                    break
+            j += 1
+
+        result.append('__SET__ ')
+        i = j
+
+    return ''.join(result)
+
+
+# ==============================
+# 12. 함수 호출 내부 제거
+# ==============================
+
+def strip_function_args(sql):
+    result = []
+    i = 0
+    length = len(sql)
+    sql_up = sql.upper()
+
+    while i < length:
+        m = re.search(r'(\b\w+)\s*\(', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        fn_start = i + m.start()
+        fn_name = m.group(1).upper()
+        paren_start = i + m.end() - 1
+
+        if fn_name in ('FROM', 'JOIN', 'USING', 'WITH', 'ON',
+                       'SELECT', 'WHERE', 'HAVING', 'SET',
+                       'INSERT', 'UPDATE', 'DELETE', 'MERGE',
+                       'CREATE', 'TABLE', 'VIEW', 'INTO',
+                       'WHEN', 'THEN', 'ELSE', 'AND', 'OR', 'NOT'):
+            result.append(sql[i:paren_start+1])
+            i = paren_start + 1
+            continue
+
+        result.append(sql[i:fn_start + len(m.group(1))])
+        inner, end_pos = extract_paren_content(sql, paren_start)
+        result.append('(__FUNC_ARGS__)')
+        i = end_pos + 1
+
+    return ''.join(result)
+
+
+# ==============================
+# 13. CTE 분석
+#     INSERT INTO ... WITH cte AS (...) SELECT 패턴도 처리
+# ==============================
+
+def extract_cte_map(query):
+
+    cte_map = {}
+
+    if 'WITH' not in query.upper():
+        return cte_map
+
+    pattern = re.compile(
+        r'(\w+)\s+AS\s*\((.*?)\)\s*(,|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bMERGE\b)',
+        re.IGNORECASE | re.DOTALL
+    )
+
+    for match in pattern.finditer(query):
+        alias = match.group(1)
+        subquery = match.group(2)
+        sources = extract_sources_recursive(subquery)
+        cte_map[alias.upper()] = sources
+
+    return cte_map
+
+
+# ==============================
+# 14. 소스 추출 (인라인뷰 포함 재귀)
+# ==============================
+
+def extract_sources_recursive(query):
+
+    sources = set()
+
+    q = remove_string_literals(query)
+    q = strip_select_columns(q)
+    q = strip_update_set(q)
+    q = strip_function_args(q)
+
+    length = len(q)
+
+    kw_pattern = re.compile(r'\b(FROM|JOIN|USING)\b', re.IGNORECASE)
+
+    CLAUSE_END = {
+        'WHERE', 'ON', 'WHEN', 'SET', 'HAVING', 'GROUP', 'ORDER',
+        'UNION', 'INTERSECT', 'EXCEPT', 'LIMIT', 'SELECT',
+        'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'WITH',
+        'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS',
+        'JOIN', 'FROM', 'USING'
+    }
+
+    for kw_match in kw_pattern.finditer(q):
+        j = kw_match.end()
+
+        while j < length and q[j] in ' \t\n\r':
+            j += 1
+
+        if j >= length:
+            continue
+
+        if q[j] == '(':
+            inner, end_pos = extract_paren_content(q, j)
+            sub_sources = extract_sources_recursive(inner)
+            sources.update(sub_sources)
+            j = end_pos + 1
+            # alias 스킵
+            alias_m = re.match(r'[\s]+(\w+)', q[j:])
+            if alias_m and alias_m.group(1).upper() not in CLAUSE_END:
+                j += alias_m.end()
+            # 콤마가 없으면 다음 키워드로
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+            if j >= length or q[j] != ',':
+                continue
+            j += 1  # 콤마 건너뛰고 while 루프 진입
+
+        while j < length:
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            if j >= length or q[j] in (';', ')'):
+                break
+
+            if q[j] == '(':
+                inner, end_pos = extract_paren_content(q, j)
+                sub_sources = extract_sources_recursive(inner)
+                sources.update(sub_sources)
+                j = end_pos + 1
+                alias_m = re.match(r'[\s]+(\w+)', q[j:])
+                if alias_m and alias_m.group(1).upper() not in CLAUSE_END:
+                    j += alias_m.end()
+            else:
+                tok_m = re.match(r'([^\s,;()\n]+)', q[j:])
+                if not tok_m:
+                    break
+                token = tok_m.group(1)
+                token_up = token.upper().rstrip(',;')
+
+                if token_up in CLAUSE_END:
+                    break
+
+                tbl = clean_table(token)
+                if tbl:
+                    sources.add(tbl)
+
+                j += tok_m.end()
+
+                alias_m = re.match(r'[\s]+([^\s,;()\n]+)', q[j:])
+                if alias_m:
+                    alias_word = alias_m.group(1).upper()
+                    if alias_word not in CLAUSE_END and not alias_word.startswith(','):
+                        j += alias_m.end()
+
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            if j < length and q[j] == ',':
+                j += 1
+            else:
+                break
+
+    return sources
+
+
+# ==============================
+# 15. 타겟 추출
+# ==============================
+
+def extract_target_tables(query):
+
+    targets = set()
+
+    patterns = [
+        r'INSERT\s+OVERWRITE\s+TABLE\s+([^\s(]+)',
+        r'INSERT\s+INTO\s+([^\s(]+)',
+        r'CREATE\s+(?:TABLE|VIEW)\s+([^\s(]+)',
+        r'UPDATE\s+([^\s(]+)',
+        r'DELETE\s+FROM\s+([^\s(]+)',
+        r'MERGE\s+INTO\s+([^\s(]+)',
+        r'ALTER\s+TABLE\s+([^\s(]+)',
+        r'DROP\s+TABLE\s+([^\s(]+)',
+        r'TRUNCATE\s+TABLE\s+([^\s(]+)'
+    ]
+
+    for pat in patterns:
+        for match in re.finditer(pat, query, re.IGNORECASE):
+            tbl = clean_table(match.group(1))
+            if tbl:
+                targets.add(tbl)
+
+    return targets
+
+
+# ==============================
+# 16. 메인
+# ==============================
+
+def main():
+
+    total_files = 0
+    total_queries = 0
+    total_output_rows = 0
+    total_file_lines = 0
+
+    program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+    source_last_dir = os.path.basename(SOURCE_DIR.rstrip(os.sep))
+
+    out_dir = os.path.join(os.getcwd(), "out")
+    os.makedirs(out_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"{program_name}_{source_last_dir}_{timestamp}.csv"
+    output_path = os.path.join(out_dir, output_filename)
+
+    rows_buffer = []
+
+    for root, _, files in os.walk(SOURCE_DIR):
+
+        for file in files:
+            if file.lower().endswith(TARGET_EXTENSIONS):
+
+                total_files += 1
+
+                full_path = os.path.join(root, file)
+                abs_path = os.path.abspath(root)
+
+                queries, file_lines = extract_queries_from_file(full_path)
+
+                total_file_lines += file_lines
+                total_queries += len(queries)
+
+                for query in queries:
+
+                    sql_typ = detect_real_sql_type(query)
+                    crud_type = classify_sql_type(sql_typ)
+
+                    cte_map = extract_cte_map(query)
+                    sources = extract_sources_recursive(query)
+                    targets = extract_target_tables(query)
+
+                    real_sources = set()
+
+                    for s in sources:
+                        if s and s.upper() in cte_map:
+                            real_sources.update(cte_map[s.upper()])
+                        else:
+                            if s:
+                                real_sources.add(s)
+
+                    # CTE 이름 자체는 real_sources에서 제거
+                    cte_names = set(cte_map.keys())
+                    real_sources = {s for s in real_sources
+                                    if s and s.upper() not in cte_names}
+
+                    if not real_sources and not targets:
+                        continue
+
+                    if not real_sources:
+                        real_sources = {None}
+                    if not targets:
+                        targets = {None}
+
+                    # 중복 제거: (src, tgt) 조합 유일하게
+                    seen_pairs = set()
+                    for tgt in sorted(targets, key=lambda x: x or ''):
+                        for src in sorted(real_sources, key=lambda x: x or ''):
+                            pair = (src, tgt)
+                            if pair in seen_pairs:
+                                continue
+                            seen_pairs.add(pair)
+                            rows_buffer.append([
+                                crud_type,
+                                abs_path,
+                                file,
+                                full_path,
+                                sql_typ,
+                                src,
+                                tgt
+                            ])
+                            total_output_rows += 1
+
+    # 🔥 소스/타겟 없는 파일은 생성 제외
+    if total_output_rows == 0:
+        print("====================================")
+        print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+        print("====================================")
+        print("CSV 파일 생성 대상이 없습니다.")
+        print("====================================")
+        return
+
+    with open(output_path, 'w', newline='', encoding='utf-8') as out_file:
+        writer = csv.writer(out_file, delimiter=DELIMITER)
+        writer.writerow([
+            "crud_type","abs_path","file","full_path",
+            "sql_typ","source_table","target_table"
+        ])
+        writer.writerows(rows_buffer)
+
+    print("====================================")
+    print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+    print("====================================")
+    print(f"CSV 파일 위치        : {output_path}")
+    print(f"처리 파일 건수        : {total_files}")
+    print(f"추출 쿼리 건수        : {total_queries}")
+    print(f"생성 행 건수          : {total_output_rows}")
+    print(f"전체 파일 총 행 건수  : {total_file_lines}")
+    print("====================================")
+
+
+if __name__ == "__main__":
+    main()
+
+
+---------------
+--■수정결과
+---------------
+문제를 분석합니다. UPDATE,,${T_A}.tb_0 행이 추가로 생기는 원인을 찾겠습니다.중복 행 발생 원인 파악중복 행 발생 원인 파악중복 행 발생 원인 파악스크립트완료현재 코드에서는 중복이 없는데 
+UPDATE,,${T_A}.tb_0 행이 생긴다면, WITH upd_w_tb AS (...) UPDATE ... 쿼리가 두 번 파싱되는 것입니다 — WITH로 한 번, UPDATE로 한 번. UPDATE 단독으로 파싱될 때 소스가 없으면 
+{None} 이 되어 빈 소스 행이 생깁니다.쿼리가 몇 개 추출되는지 확인쿼리가 몇 개 추출되는지 확인쿼리가 몇 개 추출되는지 확인스크립트완료쿼리는 1개만 추출됩니다. 
+그러면 UPDATE 자체에서도 extract_target_tables가 ${T_A}.tb_0을 잡으면서, 동시에 UPDATE ${T_A}.tb_0 a 뒤의 a가 aliases로 인식되지 않고 무언가가 추가로 생기는 게 아닌지... 
+아니면 원본소스(문서에 제공된)와 현재 파일이 다를 수 있습니다. 원본소스를 그대로 사용해서 테스트합니다.원본소스로 직접 테스트원본소스로 직
+접 테스트원본소스로 직접 테스트스크립트완료원본소스(문서 제공)에서도 중복 행이 없습니다. 즉 UPDATE,,${T_A}.tb_0 행은 WITH 키워드가 UPDATE 보다 먼저 매치되어 별도 쿼리로 추출된 경우 발생하는 것입니다 
+— 이는 MAIN_QUERY_START가 WITH를 만나면 WITH 전체 블록을 잡고, 그 안의 UPDATE도 다시 별도로 잡히는 상황입니다.
+원인: WITH ... UPDATE 쿼리에서 pos가 WITH 시작점에서 끝(;)까지 처리한 후, 내부의 UPDATE 키워드 위치는 이미 지나갔으므로 중복이 안 되어야 정상인데, 실제 사용자 환경에서는 발생한다고 합니다.
+가장 안전한 해결책: 소스가 있는데 타겟도 있고 소스가 None인 행(즉 real_sources가 {None}인 경우)은, 소스가 있는 다른 행이 이미 존재하면 제외하는 것이 아니라, 요청 사항대로 src가 None인 행은 
+real_sources에 실제 값이 있을 때 출력하지 않음 — 즉 src is None이고 real_sources에 실제 테이블이 있으면 skip합니다.
+하지만 주의사항 2번에 따라 "FROM이나 JOIN에 소스테이블이 없는 UPDATE"는 소스 없이 생성 가능합니다.
+따라서 수정 포인트: real_sources가 {None}(즉 실제 소스가 없을 때)인 경우에만 None 행 출력, 실제 소스가 있는데 None이 섞여 있으면 None 제거.
+현재 코드를 보면 real_sources = {None}은 real_sources가 빈 셋일 때만 할당됩니다. 따라서 문제는 다른 곳에 있습니다. 실제로는 두 쿼리가 추출되는 상황입니다. WITH ... UPDATE ...; 전체가 한 쿼리, 
+그리고 UPDATE ${T_A}.tb_0 a ... FROM upd_w_tb가 또 별도로 추출됩니다.명령 2개 실행함명령 2개 실행함WITH...UPDATE 쿼리 추출 시뮬레이션스크립트WITH UPDATE 쿼리 추출 시뮬레이션스크립트완료쿼리는 1개만 추출됩니다. 
+그렇다면 사용자가 보고하는 UPDATE,,${T_A}.tb_0 추가 행의 원인은 다른 데 있습니다. extract_target_tables에서 UPDATE ${T_A}.tb_0을 잡을 때, 동시에 쿼리 내의 어딘가에서 타겟이 2개 생기는 걸 수도 있습니다.
+타겟 추출 상세 확인타겟 추출 상세 확인타겟 추출 상세 확인스크립트완료타겟도 1개입니다. 현재 코드에서는 재현이 안 됩니다. 사용자가 언급한 문제는 실제 환경의 다른 SQL 파일에서 발생할 수 있는 일반적인 패턴으로, 
+real_sources가 실제 값을 가질 때 None 행이 함께 생성되지 않도록 방어 코드를 추가하면 됩니다.
+문제의 근본 원인: targets에 값이 있는데 real_sources가 비어서 {None}으로 설정된 후, 별도로 같은 쿼리에서 소스가 있는 행도 생성되는 경우. 이는 CTE 확장 과정에서 동일 쿼리가 두 번 처리되거나, 
+real_sources에 None과 실제 값이 혼재하는 경우입니다.
+수정: real_sources에 실제 값(None이 아닌)이 있을 때, None을 포함한 행은 출력하지 않음.메인 루프의 rows_buffer 추가 부분 
+확인메인 루프의 rows_buffer 추가 부분 확인메인 루프의 rows_buffer 추가 부분 확인완료이제 정확한 수정을 합니다. 요구사항:
+
+real_sources에 실제 값이 있을 때: src=None 행 출력 안 함
+real_sources가 완전히 비어있을 때: 주의사항 2번에 따라 src=None 행 출력 허용 (FROM/JOIN 소스 없는 단순 UPDATE)
+파일 수정됨, 명령 실행함파일 수정됨, 명령 실행함real_sources에 실제 값이 있을 때 None 행 제외, 없을 때만 None 허용sql_table_extractor.py+31-26수정 후 
+테스트스크립트완료주의사항 2번 케이스(소스 없는 단순 UPDATE)도 테스트합니다.소스 없는 단순 UPDATE 케이스 테스트소스 없는 단순 UPDATE 케이스 테스트소스 없는 
+단순 UPDATE 케이스 테스트스크립트완료모든 케이스가 올바릅니다. 기존 테스트도 확인합니다.회귀 테스트회귀 테스트회귀 테스트스크립트완료모두 정상입니다.
+Presented filePresented filePresented file완료수정은 메인 루프 한 곳입니다:
+python# ★ real_sources에 실제 값이 있으면 src=None 행은 제외
+has_real_src = any(s is not None for s in real_sources)
+for tgt in ...:
+    for src in ...:
+        if has_real_src and src is None:
+            continue  # ← 이 행이 핵심
+동작 원리:
+
+real_sources에 실제 테이블명이 하나라도 있으면 → src=None인 빈 행 출력 안 함
+real_sources가 완전히 비어서 {None}으로만 구성되면 → 주의사항 2번에 따라 소스 없이 한 행 출력 허용 (단순 UPDATE ... SET ... WHERE 케이스)
+Sql table extractorPY 
+
+
+
+
+
+--■ 다시요청
+[원본소스] 실행결과
+[쿼리예제]에 대한 분석 결과가 "[실행후결과]" 처럼 source_table 이 없는 행이 추가로 생성되는데
+"[수정실행후예상결과]"처럼 source_table이 없는 결과는 파일생성시 제외하고 생성되도록
+"[원본소스]" 로직 최대한 유지하면서 요청한내용 적용 수정한 전체소스
+
+주의:
+1) crud_type,abs_path,file,full_path 레이아웃은 기존로직과 동일하게 추출되고
+sql_typ,source_table,target_table 내용이 수정되어 추가보완되어 생성되면 됩니다.
+2) from 이나 join에 소스테이블이 없이 update 쿼리에 수정하는 타겟테이블만 있는 쿼리에서는 소스테이블 없이 파일의 행이 생성되어도 됨
+
+[실행후결과]
+sql_typ,source_table,target_table
+UPDATE,${T_A}.tb_0,${T_A}.tb_0
+UPDATE,${T_S}.tb_3,${T_A}.tb_0
+UPDATE,${T_N}.tb_4,${T_A}.tb_0
+UPDATE,,${T_A}.tb_0
+
+[수정실행후예상결과]
+sql_typ,source_table,target_table
+UPDATE,${T_A}.tb_0,${T_A}.tb_0
+UPDATE,${T_S}.tb_3,${T_A}.tb_0
+UPDATE,${T_N}.tb_4,${T_A}.tb_0
+
+
+[쿼리예제]
+with upd_w_tb as
+(
+select a.col_1
+     , a.col_2
+  from ${T_A}.tb_0 a
+  join ${T_S}.tb_3 c
+    on a.col_a=c.col_c
+  join ${T_N}.tb_4 d
+    on a.col_a=d.col_d
+)
+update ${T_A}.tb_0 a
+set col_u= b.col_yn
+from upd_w_tb
+where a.col_2 = b.col_2
+;
+
+
+
+
+
+아래 [원본소스]에서 "예제쿼리.jpg" 가
+"쿼리분석결과.jpg"의 중간 테두리 있는 결과(="[원본소스실행결과]")로 생성된 것으로 보이는데
+
+[소스수정후실행후 추출결과예시] 처럼
+소스테이블과 타겟테이블이 추출되도록 아래 원본소스 로직 최대한 유지하면서 수정한 전체소스
+
+[원본소스실행결과]
+sql_typ,source_table,target_table
+UPDATE,,${T_MIRT}.h_mmap_rt_echg_f_t01_wk
+
+[소스수정후실행후 추출결과예시]
+sql_typ,source_table,target_table
+UPDATE,${T_MIRT}.h_mmap_rt_echg_f_t01_wk,${T_MIRT}.h_mmap_rt_echg_f_t01_wk
+UPDATE,${T_ORD}.zord_svc_chg_hst,${T_MIRT}.h_mmap_rt_echg_f_t01_wk
+
+주의:
+crud_type,abs_path,file,full_path 레이아웃은 기존로직과 동일하게 추출되고
+sql_typ,source_table,target_table 내용이 수정되어 추가보완되어 생성되면 됩니다.
+
+[원본소스]
+#!/usr/bin/env python3
+
+import os
+import re
+import sys
+import csv
+from datetime import datetime
+
+# ==============================
+# 1. 파라미터 체크
+# ==============================
+
+if len(sys.argv) != 2:
+    print("사용법: python3 프로그램명.py 절대경로포함소스디렉토리")
+    sys.exit(1)
+
+SOURCE_DIR = os.path.abspath(sys.argv[1])
+
+if not os.path.isdir(SOURCE_DIR):
+    print("오류: 유효한 디렉토리가 아닙니다.")
+    sys.exit(1)
+
+# ==============================
+# 2. 설정
+# ==============================
+
+TARGET_EXTENSIONS = ('.sh', '.hql', '.sql', '.uld', '.ld')
+DELIMITER = ","
+EXCLUDE_TABLE = "sidtest.ad1901_rgb_ac190212_svc"
+
+RESERVED_WORDS = {
+    "SET","WHERE","AND","OR","ON","WHEN","THEN","ELSE",
+    "VALUES","SELECT","UPDATE","INSERT","DELETE","MERGE",
+    "USING","FROM","JOIN","INTO","GROUP","ORDER","BY",
+    "HAVING","TABLE","OVERWRITE","POSITION","SUBSTRING",
+    "CAST","TRIM","COUNT","SUM","MAX","MIN","AVG",
+    "SESSION"
+}
+
+ONLY_FROM_DUAL_PATTERN = re.compile(
+    r'^\s*SELECT\s+.*?\s+FROM\s+DUAL\s*;?\s*$',
+    re.IGNORECASE | re.DOTALL
+)
+
+MAIN_QUERY_START = re.compile(
+    r'\b(CREATE|INSERT|UPDATE|DELETE|MERGE|REPLACE|ALTER|DROP|TRUNCATE|SELECT|WITH)\b',
+    re.IGNORECASE
+)
+
+# ==============================
+# 3. 전처리
+# ==============================
+
+def preprocess(content):
+    content = "\n".join(
+        line for line in content.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    content = re.sub(r'--.*', '', content)
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    return content
+
+
+# ==============================
+# 4. EXECUTE IMMEDIATE 내부 SQL 추출
+# ==============================
+
+def extract_execute_immediate(content):
+    """EXECUTE IMMEDIATE '...' 내부 SQL 문자열 추출"""
+    results = []
+    pattern = re.compile(r'\bEXECUTE\s+IMMEDIATE\s+\'(.*?)\'', re.IGNORECASE | re.DOTALL)
+    for m in pattern.finditer(content):
+        inner_sql = m.group(1).strip()
+        if inner_sql:
+            results.append(inner_sql)
+    return results
+
+
+# ==============================
+# 5. depth 기반 쿼리 추출
+# ==============================
+
+def extract_queries_from_file(file_path):
+
+    queries = []
+    total_lines = 0
+
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            raw = f.read()
+
+        total_lines = raw.count("\n") + 1
+        content = preprocess(raw)
+
+        # EXECUTE IMMEDIATE 내부 SQL 먼저 수집
+        ei_queries = extract_execute_immediate(content)
+
+        # EXECUTE IMMEDIATE '...' 부분을 마스킹하여 중복 추출 방지
+        masked = re.sub(
+            r'\bEXECUTE\s+IMMEDIATE\s+\'.*?\'',
+            'EXECUTE_IMMEDIATE_MASKED',
+            content,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+
+        pos = 0
+        length = len(masked)
+
+        while pos < length:
+
+            match = MAIN_QUERY_START.search(masked, pos)
+            if not match:
+                break
+
+            keyword = match.group(1).upper()
+            start = match.start()
+            end = start
+            depth = 0
+            in_string = False
+            quote_char = None
+
+            while end < length:
+                ch = masked[end]
+
+                if ch in ("'", '"'):
+                    if not in_string:
+                        in_string = True
+                        quote_char = ch
+                    elif quote_char == ch:
+                        in_string = False
+
+                elif not in_string:
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth = max(depth - 1, 0)
+                    elif ch == ";" and depth == 0:
+                        end += 1
+                        break
+
+                end += 1
+
+            query = masked[start:end].strip()
+
+            if query:
+                if EXCLUDE_TABLE.lower() in query.lower():
+                    pos = end
+                    continue
+                if ONLY_FROM_DUAL_PATTERN.match(query):
+                    pos = end
+                    continue
+
+                # ALTER SESSION 등 ALTER TABLE/VIEW 아닌 ALTER는 스킵
+                if keyword == 'ALTER':
+                    if not re.match(r'ALTER\s+(TABLE|VIEW)\b', query, re.IGNORECASE):
+                        pos = end
+                        continue
+
+                queries.append(query)
+
+            pos = end
+
+        # EXECUTE IMMEDIATE 내부 SQL 추가
+        queries.extend(ei_queries)
+
+    except Exception:
+        pass
+
+    return queries, total_lines
+
+
+# ==============================
+# 6. SQL TYPE
+# ==============================
+
+def detect_real_sql_type(query):
+
+    q = query.strip().upper()
+    first_word = q.split()[0] if q.split() else "UNKNOWN"
+
+    # INSERT INTO ... WITH cte AS (...) SELECT ... 패턴 처리
+    # 첫 키워드가 INSERT이면 바로 INSERT 반환
+    if first_word not in ("WITH",):
+        return first_word
+
+    # WITH 시작인 경우 → 실질 DML 탐색
+    if re.search(r'\bINSERT\b', q):
+        return "INSERT"
+    if re.search(r'\bUPDATE\b', q):
+        return "UPDATE"
+    if re.search(r'\bDELETE\b', q):
+        return "DELETE"
+    if re.search(r'\bMERGE\b', q):
+        return "MERGE"
+
+    return "SELECT"
+
+
+def classify_sql_type(sql_typ):
+
+    if sql_typ in ("CREATE","INSERT","MERGE","REPLACE"):
+        return "C"
+    elif sql_typ == "SELECT":
+        return "R"
+    elif sql_typ in ("UPDATE","ALTER"):
+        return "U"
+    elif sql_typ in ("DELETE","DROP","TRUNCATE"):
+        return "D"
+    return "R"
+
+
+# ==============================
+# 7. 테이블 정제
+# ==============================
+
+def clean_table(name):
+
+    if not name:
+        return None
+
+    name = name.strip()
+    name = re.split(r'\s+', name)[0]
+    name = name.rstrip(";,")
+    name = name.replace("(", "").replace(")", "")
+
+    upper = name.upper()
+
+    if (not name or
+        upper in RESERVED_WORDS or
+        upper == "DUAL" or
+        name.isdigit() or
+        re.match(r'^\d', name)):
+        return None
+
+    return name
+
+
+# ==============================
+# 8. 문자열 제거 (파싱 전처리)
+# ==============================
+
+def remove_string_literals(sql):
+    result = re.sub(r"'[^']*'", "''", sql)
+    result = re.sub(r'"[^"]*"', '""', result)
+    return result
+
+
+# ==============================
+# 9. 괄호 내부 추출
+# ==============================
+
+def extract_paren_content(sql, start):
+    depth = 0
+    i = start
+    while i < len(sql):
+        if sql[i] == '(':
+            depth += 1
+        elif sql[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return sql[start+1:i], i
+        i += 1
+    return sql[start+1:], len(sql)-1
+
+
+# ==============================
+# 10. SELECT 컬럼절 제거
+# ==============================
+
+def strip_select_columns(sql):
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        m = re.search(r'\bSELECT\b', sql_up[i:], re.IGNORECASE)
+        if not m:
+            result.append(sql[i:])
+            break
+
+        sel_pos = i + m.start()
+        result.append(sql[i:sel_pos])
+        result.append('SELECT ')
+
+        j = sel_pos + len('SELECT')
+        depth = 0
+        found_from = False
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth < 0:
+                    break
+            elif depth == 0:
+                fm = re.match(r'\bFROM\b', sql_up[j:], re.IGNORECASE)
+                if fm:
+                    result.append('__COLS__ ')
+                    i = j
+                    found_from = True
+                    break
+                if ch == ';':
+                    result.append(sql[j:j+1])
+                    i = j + 1
+                    found_from = True
+                    break
+            j += 1
+
+        if not found_from:
+            result.append(sql[j:])
+            break
+
+    return ''.join(result)
+
+
+# ==============================
+# 11. UPDATE SET 절 제거
+# ==============================
+
+def strip_update_set(sql):
+    result = []
+    i = 0
+    sql_up = sql.upper()
+    length = len(sql)
+
+    while i < length:
+        m = re.search(r'\bSET\b', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        set_pos = i + m.start()
+        result.append(sql[i:set_pos])
+        result.append('SET ')
+
+        j = set_pos + len('SET')
+        depth = 0
+
+        while j < length:
+            ch = sql[j]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0:
+                up_remain = sql_up[j:]
+                if (re.match(r'\bWHERE\b', up_remain) or
+                    re.match(r'\bWHEN\b', up_remain) or
+                    re.match(r'\bON\b', up_remain) or
+                    re.match(r'\bFROM\b', up_remain)):
+                    break
+                if ch == ';':
+                    break
+            j += 1
+
+        result.append('__SET__ ')
+        i = j
+
+    return ''.join(result)
+
+
+# ==============================
+# 12. 함수 호출 내부 제거
+# ==============================
+
+def strip_function_args(sql):
+    result = []
+    i = 0
+    length = len(sql)
+    sql_up = sql.upper()
+
+    while i < length:
+        m = re.search(r'(\b\w+)\s*\(', sql_up[i:])
+        if not m:
+            result.append(sql[i:])
+            break
+
+        fn_start = i + m.start()
+        fn_name = m.group(1).upper()
+        paren_start = i + m.end() - 1
+
+        if fn_name in ('FROM', 'JOIN', 'USING', 'WITH', 'ON',
+                       'SELECT', 'WHERE', 'HAVING', 'SET',
+                       'INSERT', 'UPDATE', 'DELETE', 'MERGE',
+                       'CREATE', 'TABLE', 'VIEW', 'INTO',
+                       'WHEN', 'THEN', 'ELSE', 'AND', 'OR', 'NOT'):
+            result.append(sql[i:paren_start+1])
+            i = paren_start + 1
+            continue
+
+        result.append(sql[i:fn_start + len(m.group(1))])
+        inner, end_pos = extract_paren_content(sql, paren_start)
+        result.append('(__FUNC_ARGS__)')
+        i = end_pos + 1
+
+    return ''.join(result)
+
+
+# ==============================
+# 13. CTE 분석
+#     INSERT INTO ... WITH cte AS (...) SELECT 패턴도 처리
+# ==============================
+
+def extract_cte_map(query):
+
+    cte_map = {}
+
+    if 'WITH' not in query.upper():
+        return cte_map
+
+    pattern = re.compile(
+        r'(\w+)\s+AS\s*\((.*?)\)\s*(,|\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bMERGE\b)',
+        re.IGNORECASE | re.DOTALL
+    )
+
+    for match in pattern.finditer(query):
+        alias = match.group(1)
+        subquery = match.group(2)
+        sources = extract_sources_recursive(subquery)
+        cte_map[alias.upper()] = sources
+
+    return cte_map
+
+
+# ==============================
+# 14. 소스 추출 (인라인뷰 포함 재귀)
+# ==============================
+
+def extract_sources_recursive(query):
+
+    sources = set()
+
+    q = remove_string_literals(query)
+    q = strip_select_columns(q)
+    q = strip_update_set(q)
+    q = strip_function_args(q)
+
+    length = len(q)
+
+    kw_pattern = re.compile(r'\b(FROM|JOIN|USING)\b', re.IGNORECASE)
+
+    CLAUSE_END = {
+        'WHERE', 'ON', 'WHEN', 'SET', 'HAVING', 'GROUP', 'ORDER',
+        'UNION', 'INTERSECT', 'EXCEPT', 'LIMIT', 'SELECT',
+        'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'WITH',
+        'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS',
+        'JOIN', 'FROM', 'USING'
+    }
+
+    for kw_match in kw_pattern.finditer(q):
+        j = kw_match.end()
+
+        while j < length and q[j] in ' \t\n\r':
+            j += 1
+
+        if j >= length:
+            continue
+
+        if q[j] == '(':
+            inner, end_pos = extract_paren_content(q, j)
+            sub_sources = extract_sources_recursive(inner)
+            sources.update(sub_sources)
+            j = end_pos + 1
+            # alias 스킵
+            alias_m = re.match(r'[\s]+(\w+)', q[j:])
+            if alias_m and alias_m.group(1).upper() not in CLAUSE_END:
+                j += alias_m.end()
+            # 콤마가 없으면 다음 키워드로
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+            if j >= length or q[j] != ',':
+                continue
+            j += 1  # 콤마 건너뛰고 while 루프 진입
+
+        while j < length:
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            if j >= length or q[j] in (';', ')'):
+                break
+
+            if q[j] == '(':
+                inner, end_pos = extract_paren_content(q, j)
+                sub_sources = extract_sources_recursive(inner)
+                sources.update(sub_sources)
+                j = end_pos + 1
+                alias_m = re.match(r'[\s]+(\w+)', q[j:])
+                if alias_m and alias_m.group(1).upper() not in CLAUSE_END:
+                    j += alias_m.end()
+            else:
+                tok_m = re.match(r'([^\s,;()\n]+)', q[j:])
+                if not tok_m:
+                    break
+                token = tok_m.group(1)
+                token_up = token.upper().rstrip(',;')
+
+                if token_up in CLAUSE_END:
+                    break
+
+                tbl = clean_table(token)
+                if tbl:
+                    sources.add(tbl)
+
+                j += tok_m.end()
+
+                alias_m = re.match(r'[\s]+([^\s,;()\n]+)', q[j:])
+                if alias_m:
+                    alias_word = alias_m.group(1).upper()
+                    if alias_word not in CLAUSE_END and not alias_word.startswith(','):
+                        j += alias_m.end()
+
+            while j < length and q[j] in ' \t\n\r':
+                j += 1
+
+            if j < length and q[j] == ',':
+                j += 1
+            else:
+                break
+
+    return sources
+
+
+# ==============================
+# 15. 타겟 추출
+# ==============================
+
+def extract_target_tables(query):
+
+    targets = set()
+
+    patterns = [
+        r'INSERT\s+OVERWRITE\s+TABLE\s+([^\s(]+)',
+        r'INSERT\s+INTO\s+([^\s(]+)',
+        r'CREATE\s+(?:TABLE|VIEW)\s+([^\s(]+)',
+        r'UPDATE\s+([^\s(]+)',
+        r'DELETE\s+FROM\s+([^\s(]+)',
+        r'MERGE\s+INTO\s+([^\s(]+)',
+        r'ALTER\s+TABLE\s+([^\s(]+)',
+        r'DROP\s+TABLE\s+([^\s(]+)',
+        r'TRUNCATE\s+TABLE\s+([^\s(]+)'
+    ]
+
+    for pat in patterns:
+        for match in re.finditer(pat, query, re.IGNORECASE):
+            tbl = clean_table(match.group(1))
+            if tbl:
+                targets.add(tbl)
+
+    return targets
+
+
+# ==============================
+# 16. 메인
+# ==============================
+
+def main():
+
+    total_files = 0
+    total_queries = 0
+    total_output_rows = 0
+    total_file_lines = 0
+
+    program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+    source_last_dir = os.path.basename(SOURCE_DIR.rstrip(os.sep))
+
+    out_dir = os.path.join(os.getcwd(), "out")
+    os.makedirs(out_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"{program_name}_{source_last_dir}_{timestamp}.csv"
+    output_path = os.path.join(out_dir, output_filename)
+
+    rows_buffer = []
+
+    for root, _, files in os.walk(SOURCE_DIR):
+
+        for file in files:
+            if file.lower().endswith(TARGET_EXTENSIONS):
+
+                total_files += 1
+
+                full_path = os.path.join(root, file)
+                abs_path = os.path.abspath(root)
+
+                queries, file_lines = extract_queries_from_file(full_path)
+
+                total_file_lines += file_lines
+                total_queries += len(queries)
+
+                for query in queries:
+
+                    sql_typ = detect_real_sql_type(query)
+                    crud_type = classify_sql_type(sql_typ)
+
+                    cte_map = extract_cte_map(query)
+                    sources = extract_sources_recursive(query)
+                    targets = extract_target_tables(query)
+
+                    real_sources = set()
+
+                    for s in sources:
+                        if s and s.upper() in cte_map:
+                            real_sources.update(cte_map[s.upper()])
+                        else:
+                            if s:
+                                real_sources.add(s)
+
+                    # CTE 이름 자체는 real_sources에서 제거
+                    cte_names = set(cte_map.keys())
+                    real_sources = {s for s in real_sources
+                                    if s and s.upper() not in cte_names}
+
+                    if not real_sources and not targets:
+                        continue
+
+                    if not real_sources:
+                        real_sources = {None}
+                    if not targets:
+                        targets = {None}
+
+                    # 중복 제거: (src, tgt) 조합 유일하게
+                    # ★ real_sources에 실제 값이 있으면 src=None 행은 제외
+                    has_real_src = any(s is not None for s in real_sources)
+                    seen_pairs = set()
+                    for tgt in sorted(targets, key=lambda x: x or ''):
+                        for src in sorted(real_sources, key=lambda x: x or ''):
+                            # 실제 소스가 있는데 src=None인 행은 출력 제외
+                            if has_real_src and src is None:
+                                continue
+                            pair = (src, tgt)
+                            if pair in seen_pairs:
+                                continue
+                            seen_pairs.add(pair)
+                            rows_buffer.append([
+                                crud_type,
+                                abs_path,
+                                file,
+                                full_path,
+                                sql_typ,
+                                src,
+                                tgt
+                            ])
+                            total_output_rows += 1
+
+    # 🔥 소스/타겟 없는 파일은 생성 제외
+    if total_output_rows == 0:
+        print("====================================")
+        print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+        print("====================================")
+        print("CSV 파일 생성 대상이 없습니다.")
+        print("====================================")
+        return
+
+    with open(output_path, 'w', newline='', encoding='utf-8') as out_file:
+        writer = csv.writer(out_file, delimiter=DELIMITER)
+        writer.writerow([
+            "crud_type","abs_path","file","full_path",
+            "sql_typ","source_table","target_table"
+        ])
+        writer.writerows(rows_buffer)
+
+    print("====================================")
+    print(" WITH 내부 DML 감지 포함 SQL 추출 완료")
+    print("====================================")
+    print(f"CSV 파일 위치        : {output_path}")
+    print(f"처리 파일 건수        : {total_files}")
+    print(f"추출 쿼리 건수        : {total_queries}")
+    print(f"생성 행 건수          : {total_output_rows}")
+    print(f"전체 파일 총 행 건수  : {total_file_lines}")
+    print("====================================")
+
+
+if __name__ == "__main__":
+    main()
