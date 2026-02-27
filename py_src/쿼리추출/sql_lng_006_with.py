@@ -1,3 +1,17 @@
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /home/p190872/chksrc/test --mode SIMPLE
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /home/p190872/chksrc/test --mode DETAIL
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /home/p190872/chksrc/SIDHUB --mode DETAIL
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/SID/SRC/SIDHUB --mode SIMPLE
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/SID/SRC/SIDHUB --mode DETAIL
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/TMT --mode SIMPLE
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/TDIA --mode SIMPLE
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/TDM --mode SIMPLE
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/SID --mode SIMPLE
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/TMT --mode DETAIL
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/TDIA --mode DETAIL
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/TDM --mode DETAIL
+## python3 /home/p190872/chksrc/sql_lng_006_with.py /NAS/MIDP/DBMSVC/MIDP/SID --mode DETAIL
+## GROK문의
 ## 아래 [원본소스]에 현재로직 최대한 유지하고
 ## 소스와 타겟테이블명을 스키마와 테이블명으로 분리한 "[추가레이아웃항목]"을
 ## 추가하여 파일생성하도록 수정한 전체소스부탁
@@ -9,32 +23,10 @@
 ## src_table
 ## tgt_schema
 ## tgt_table
-
-#### 문의1) 스키마값 대치
-
-[스키마변수명 컨버전요청]
-1.참조할 파일
-현재실행디렉토리내 db_schema.env 파일내용이 아래형식인데
-T_TMT="midp_tmt"
-T_CAL="midp_cal"
-T_TDW="midp"
-
-2. 스키마변수컨버전방법
-src_schema와 tgt_schema 값을 db_schema.env 파일내용읽어서
-스키마값이 "$T_TMT" 또는 "${T_TMT}" 인 경우
-src_schema,tgt_schema 값에서 "$","{"와, "}" 등의 기호를 제거한값을
-db_schema.env 내의 매칭되는 변수값으로 대치하여 파일생성하도록
-아래"[원본소스]" 기존로직 최대한 유지하고 수정한 전체소스구현
-
---스키마값 변경예시예시
-src_schema:"${T_TDW}" -> "midp" 값으로 값변경
-tgt_schema:"$T_CAL"  ->  "midp_cal" 값으로 값변경
--->sql_lng_007_with.py로 소스파일생성
-
-[원본소스]
+##
 #!/usr/bin/env python3
-# sql_lng_005_with_t02.py
-# 실행방법: python3 sql_lng_005_with_t02.py 소스디렉토리 [--mode SIMPLE|DETAIL]
+# sql_lng_006_with.py
+# 실행방법: python3 sql_lng_006_with.py 소스디렉토리 [--mode SIMPLE|DETAIL]
 # 출력컬럼: abs_path,file,full_path,crud_type,sql_typ,source_table,source_type,target_table,target_type,depth,
 #          src_schema,src_table,tgt_schema,tgt_table
 #

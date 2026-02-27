@@ -12,6 +12,18 @@
 ## python3 /home/p190872/chksrc/sql_lng_005_with_t02.py /NAS/MIDP/DBMSVC/MIDP/TDM --mode DETAIL
 ## python3 /home/p190872/chksrc/sql_lng_005_with_t02.py /NAS/MIDP/DBMSVC/MIDP/SID --mode DETAIL
 ## GROK문의
+## 아래 [원본소스]에 현재로직 최대한 유지하고
+## 소스와 타겟테이블명을 스키마와 테이블명으로 분리한 "[추가레이아웃항목]"을
+## 추가하여 파일생성하도록 수정한 전체소스부탁
+## source_table와 target_table을 "."기준으로 분리하여
+## 아래항목만추가하면 되고 schema가 "."이 없어서 분리 안되면 
+## schema항목은 빈값으로 놓아두면 됩니다.
+## [추가레이아웃항목]
+## src_schema
+## src_table
+## tgt_schema
+## tgt_table
+##
 #!/usr/bin/env python3
 # sql_lng_005_with_t02.py
 # 실행방법: python3 sql_lng_005_with_t02.py 소스디렉토리 [--mode SIMPLE|DETAIL]
