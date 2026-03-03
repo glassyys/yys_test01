@@ -1,0 +1,261 @@
+CREATE_VIEW_PATTERN = re.compile(
+    r"\bCREATE\s+(?:TEMPORARY\s+|TEMP\s+)?VIEW\s+(\w+)\b",
+    re.IGNORECASE
+)
+
+Spark / Hive / PostgreSQL / MySQL 기준으로 더 튼튼한 패턴
+
+좋은 케이스들이라서 엔진별로 현실적으로 많이 쓰이는 문법을 커버하는 패턴으로 나눠서 정리해볼게요.
+(완벽한 SQL 파서는 아니지만, 실무에서 VIEW 이름 추출용으로 꽤 튼튼한 수준)
+
+아래 공통 목표는:
+
+CREATE [OR REPLACE]
+TEMP | TEMPORARY
+IF NOT EXISTS
+schema 포함 (schema.view)
+quoted identifier ("view", `view`)
+
+대소문자 무시
+
+1️⃣ Spark / Hive 계열
+지원 문법 예
+CREATE VIEW v1
+CREATE TEMP VIEW v2
+CREATE TEMPORARY VIEW v3
+CREATE OR REPLACE VIEW db.v4
+CREATE VIEW IF NOT EXISTS `db`.`v5`
+
+추천 패턴
+CREATE_VIEW_SPARK_HIVE = re.compile(
+    r"""
+    \bCREATE\s+
+    (?:OR\s+REPLACE\s+)?          # OR REPLACE
+    (?:TEMPORARY\s+|TEMP\s+)?     # TEMP / TEMPORARY
+    VIEW\s+
+    (?:IF\s+NOT\s+EXISTS\s+)?     # IF NOT EXISTS
+    (
+        (?:`[^`]+`|\w+)           # view or `view`
+        (?:\.(?:`[^`]+`|\w+))?    # optional schema
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE
+)
+
+2️⃣ PostgreSQL
+지원 문법 예
+CREATE VIEW v1
+CREATE OR REPLACE VIEW v2
+CREATE TEMP VIEW v3
+CREATE TEMPORARY VIEW schema.v4
+CREATE VIEW IF NOT EXISTS "MyView"
+
+추천 패턴
+CREATE_VIEW_POSTGRES = re.compile(
+    r"""
+    \bCREATE\s+
+    (?:OR\s+REPLACE\s+)?          # OR REPLACE
+    (?:TEMPORARY\s+|TEMP\s+)?     # TEMP / TEMPORARY
+    VIEW\s+
+    (?:IF\s+NOT\s+EXISTS\s+)?     # IF NOT EXISTS
+    (
+        (?:"[^"]+"|\w+)           # view or "view"
+        (?:\.(?:"[^"]+"|\w+))?    # optional schema
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE
+)
+
+3️⃣ MySQL
+
+(MySQL은 TEMP VIEW는 없고, backtick을 많이 씀)
+
+지원 문법 예
+CREATE VIEW v1
+CREATE OR REPLACE VIEW v2
+CREATE VIEW IF NOT EXISTS `db`.`v3`
+
+추천 패턴
+CREATE_VIEW_MYSQL = re.compile(
+    r"""
+    \bCREATE\s+
+    (?:OR\s+REPLACE\s+)?          # OR REPLACE
+    VIEW\s+
+    (?:IF\s+NOT\s+EXISTS\s+)?     # IF NOT EXISTS
+    (
+        (?:`[^`]+`|\w+)           # view
+        (?:\.(?:`[^`]+`|\w+))?    # optional schema
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE
+)
+
+4️⃣ 엔진 통합용 (Spark/Hive/Postgres/MySQL 한 방)
+
+“대충 다 잡고 나중에 필터링” 전략이라면 이게 제일 편함 👇
+
+CREATE_VIEW_UNIFIED = re.compile(
+    r"""
+    \bCREATE\s+
+    (?:OR\s+REPLACE\s+)?          
+    (?:TEMPORARY\s+|TEMP\s+)?     
+    VIEW\s+
+    (?:IF\s+NOT\s+EXISTS\s+)?     
+    (
+        (?:`[^`]+`|"[^"]+"|\w+)
+        (?:\.(?:`[^`]+`|"[^"]+"|\w+))?
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE
+)
+
+⚠️ 현실적인 한계 (중요)
+
+CREATE VIEW a.b.c (3-level) ❌
+
+코멘트/개행이 중간에 끼는 경우 일부 ❌
+
+CTE 안에서의 CREATE VIEW ❌
+
+👉 “SQL 파싱”이 목적이면 regex는 한계 있고
+👉 “VIEW 이름 수집/분석” 용도면 충분히 실전급입니다.
+
+원하면 다음도 도와줄 수 있어요:
+
+DROP VIEW, ALTER VIEW까지 같이 추출
+
+여러 VIEW를 한 SQL 파일에서 전부 수집
+
+Spark SQL 기준으로 더 빡센 패턴
+
+regex 말고 sqlparse / antlr 기반 접근
+
+어디까지 쓰실 건지 알려주면 거기에 맞춰 더 다듬어줄게요 👍
+
+
+1. 쿼리리니지를 만들기위해 소스 타켓 조사하려고하는데 쿼리유형이 CRUD, join, "create ~ view", merge into 등이 있는것으로 
+알고 있는데 이러한 패턴의 종류가 무엇이 있을까?
+
+1. 쿼리리니지를 만들기위해 소스 타켓 조사하려고하는데 쿼리유형이 CRUD, join, "create ~ view", merge into 등이 있는것으로 
+알고 있는데 이러한 패턴의 종류가 무엇이 있을까?
+
+좋습니다. 😄
+쿼리 리니지를 만들기 위해 데이터 흐름과 연관성을 파악할 때 조사해야 하는 쿼리 패턴을 정리하면, 크게 CRUD + 데이터 변환/적재 관련 패턴으로 나눌 수 있습니다.
+각 패턴별로 데이터 계보(Lineage)에 영향을 주는 방식도 함께 설명드리겠습니다.
+
+1️⃣ 기본 CRUD 패턴
+구분	SQL 유형	설명	Lineage 관점
+C(Create)	INSERT INTO table ...	새 데이터를 테이블에 삽입	삽입되는 컬럼과 원본 데이터 컬럼 추적
+R(Read)	SELECT ... FROM ...	데이터 조회	컬럼 출처 추적, 파생 컬럼 계산 등
+U(Update)	UPDATE table SET col=expr ...	기존 데이터 갱신	변경 컬럼과 출처 컬럼 연결, 조건 WHERE 추적
+D(Delete)	DELETE FROM table WHERE ...	데이터 삭제	삭제 조건 컬럼 추적, 영향 범위 확인
+2️⃣ 조인(JOIN) 패턴
+구분	SQL 유형	설명	Lineage 관점
+INNER JOIN	SELECT ... FROM a INNER JOIN b ON ...	양쪽 모두 존재할 때 매칭	JOIN 컬럼 연결, 최종 결과 컬럼 출처 추적
+LEFT/RIGHT/FULL JOIN	LEFT JOIN ...	한쪽 테이블 기준 전체 유지	NULL 처리 컬럼까지 추적 필요
+SELF JOIN	자기 자신 테이블과 JOIN	파생 컬럼 계산	컬럼 출처 혼동 주의
+3️⃣ 뷰(View) 관련
+구분	SQL 유형	설명	Lineage 관점
+CREATE VIEW	CREATE VIEW view_name AS SELECT ...	뷰 생성	뷰 컬럼 → 원본 테이블 컬럼 연결
+ALTER VIEW / REPLACE VIEW	CREATE OR REPLACE VIEW ...	뷰 갱신	변경 전/후 Lineage 비교 필요
+4️⃣ 데이터 적재 / 병합 패턴
+구분	SQL 유형	설명	Lineage 관점
+MERGE / UPSERT	MERGE INTO target USING source ...	조건 따라 INSERT/UPDATE	소스 컬럼 → 대상 컬럼 매핑, 조건 컬럼 추적
+INSERT SELECT	INSERT INTO target SELECT ... FROM source	소스 기반 적재	소스 컬럼 → 대상 컬럼 연결
+CTAS (Create Table As Select)	CREATE TABLE target AS SELECT ...	테이블 생성과 동시에 적재	Source → Target 완전 Lineage
+UPDATE FROM	UPDATE target SET col = s.col FROM source s WHERE ...	다른 테이블 기반 컬럼 갱신	Source 컬럼 추적, 조건 컬럼 포함
+5️⃣ 파생/변환 패턴
+구분	SQL 유형	설명	Lineage 관점
+집계 / 그룹화	SUM(), COUNT(), AVG(), GROUP BY ...	컬럼 변환	파생 컬럼 → 원본 컬럼 연결
+CASE WHEN / IF	CASE WHEN ... THEN ... ELSE ... END	조건부 컬럼	조건 컬럼 포함 Lineage 추적
+서브쿼리 / CTE	WITH ... AS (...) / (SELECT ... )	컬럼 파생	내부 쿼리 컬럼 → 최종 컬럼 연결
+함수 적용	DATE(), YEAR(), ROUND()	컬럼 값 변환	파생 컬럼 → 원본 컬럼 연결
+6️⃣ 기타 패턴
+
+트리거(Trigger) : 특정 테이블 변화 시 자동 수행 → 영향 범위 추적 필요
+
+저장 프로시저 / 함수 : 내부 SELECT/UPDATE/INSERT 존재 시 Lineage 포함 가능
+
+데이터 이동/복제 : COPY INTO, EXPORT 등 → 외부 데이터 소스 포함 가능
+
+🔹 요약
+
+쿼리 리니지를 만들 때 소스 조사 시 체크할 쿼리 패턴:
+
+CRUD: INSERT, SELECT, UPDATE, DELETE
+
+JOIN: INNER/LEFT/RIGHT/FULL/SELF
+
+뷰(View): CREATE / REPLACE / SELECT FROM VIEW
+
+적재/병합: MERGE, INSERT SELECT, CTAS, UPDATE FROM
+
+파생/변환: GROUP BY, CASE WHEN, 함수, 서브쿼리, CTE
+
+기타: 트리거, 저장 프로시저, 외부 데이터 이동
+
+💡 팁:
+
+Lineage 추적 기준 → 최종 컬럼 = 원본 컬럼 + 연산 컬럼
+
+조건 컬럼도 함께 추적해야 영향 범위를 정확히 알 수 있음
+
+원하시면 제가 이걸 실제 SQL 패턴별로 “자동으로 Lineage 유형 분류”해서 표 + 예시 쿼리까지 정리해서
+“소스 테이블/쿼리 조사 체크리스트” 형태로 만들어 드릴 수도 있습니다.
+
+이거 만들어드릴까요?
+
+실제 SQL 패턴별로 “자동으로 Lineage 유형 분류”해서 표 + 예시 쿼리까지 정리해서
+“소스 테이블/쿼리 조사 체크리스트” 형태로 부탁
+
+좋습니다. 😄
+그럼 제가 실제 SQL 패턴별로 자동으로 Lineage 유형을 분류하고, 표와 예시 쿼리를 포함해서
+“소스 테이블/쿼리 조사 체크리스트” 형태로 정리해드리겠습니다.
+
+SQL 패턴별 Lineage 유형 및 예시 – 소스 조사 체크리스트
+구분	SQL 패턴 / 유형	Lineage 유형	설명	예시 쿼리
+1. CRUD – 생성/적재	INSERT INTO	단방향 (Source → Target)	소스 데이터를 테이블에 적재	INSERT INTO target_table (id, name) SELECT id, name FROM source_table;
+	CTAS (Create Table As Select)	단방향	테이블 생성 + 소스 컬럼 → 대상 컬럼 Lineage	CREATE TABLE new_table AS SELECT id, name FROM users;
+	MERGE / UPSERT	조건별 Lineage	조건에 따라 INSERT/UPDATE 발생	MERGE INTO target t USING source s ON t.id = s.id WHEN MATCHED THEN UPDATE SET t.name = s.name WHEN NOT MATCHED THEN INSERT (id, name) VALUES (s.id, s.name);
+2. CRUD – 조회/읽기	SELECT	읽기 Lineage	소스 컬럼 → 파생 컬럼 → 최종 결과	SELECT id, name, YEAR(CURRENT_DATE) - YEAR(signup_date) AS membership_years FROM users;
+	서브쿼리	중첩 Lineage	내부 쿼리 컬럼 → 외부 컬럼 연결	SELECT u.id, (SELECT SUM(amount) FROM orders o WHERE o.user_id = u.id) AS total_amount FROM users u;
+	CTE (WITH … AS)	중간 Lineage	CTE 컬럼 → 최종 컬럼 연결	WITH recent_orders AS (SELECT user_id, SUM(amount) AS total_amount FROM orders GROUP BY user_id) SELECT u.id, ro.total_amount FROM users u LEFT JOIN recent_orders ro ON u.id = ro.user_id;
+3. CRUD – 갱신/수정	UPDATE	양방향 (Source → Target)	기존 테이블 컬럼 변경, 조건 컬럼 포함	UPDATE users SET name = 'Alice Updated' WHERE id = 1;
+	UPDATE FROM	다중 소스 → Target	외부 테이블 기반 갱신	UPDATE u SET name = s.name FROM users u JOIN source s ON u.id = s.id;
+4. CRUD – 삭제	DELETE	필터 기반 영향 추적	삭제 컬럼 + 조건 컬럼	DELETE FROM users WHERE age < 20;
+5. JOIN	INNER JOIN	다중 소스 → 결과 컬럼	매칭 컬럼 → 최종 컬럼	SELECT u.id, o.amount FROM users u INNER JOIN orders o ON u.id = o.user_id;
+	LEFT/RIGHT/FULL JOIN	NULL 처리 포함	기준 테이블 + 조인 컬럼 → 최종 컬럼	SELECT u.id, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id;
+	SELF JOIN	동일 테이블 컬럼 흐름	자기 자신 테이블 컬럼 → 파생 컬럼	SELECT a.id, b.id AS parent_id FROM employees a JOIN employees b ON a.manager_id = b.id;
+6. 뷰(View) 관련	CREATE VIEW	소스 → 뷰 컬럼	뷰 컬럼 → 원본 컬럼 연결	CREATE VIEW user_summary AS SELECT id, name FROM users;
+	REPLACE VIEW	변경 전/후 비교 필요	기존 뷰 갱신	CREATE OR REPLACE VIEW user_summary AS SELECT id, name, YEAR(CURRENT_DATE) - YEAR(signup_date) AS years FROM users;
+	SELECT FROM VIEW	뷰 컬럼 추적	뷰 컬럼 → 원본 컬럼 연결	SELECT id, years FROM user_summary;
+7. 파생/변환	CASE WHEN / IF	조건별 파생 컬럼	조건 컬럼 + 결과 컬럼 Lineage	SELECT CASE WHEN age>=20 THEN 'Adult' ELSE 'Minor' END AS age_group FROM users;
+	함수 적용	변환 컬럼 → 원본 컬럼	SUM, AVG, YEAR 등	SELECT SUM(amount) AS total_sales FROM orders;
+	GROUP BY / 집계	파생 컬럼 → 소스 컬럼	집계 컬럼 Lineage	SELECT user_id, COUNT(*) AS order_count FROM orders GROUP BY user_id;
+8. 기타	트리거(Trigger)	이벤트 기반 Lineage	INSERT/UPDATE/DELETE 발생 시 컬럼 추적	CREATE TRIGGER update_log AFTER INSERT ON orders FOR EACH ROW INSERT INTO audit_log ...;
+	저장 프로시저/함수	내부 쿼리 포함	Procedure 내 컬럼 → 최종 결과 연결	CREATE PROCEDURE update_user_name() BEGIN UPDATE users SET name='Test'; END;
+	데이터 이동/복제	외부 소스 → 대상	COPY, EXPORT 등	COPY INTO target_table FROM s3://bucket/data.csv;
+🔹 체크리스트 활용법
+
+소스 테이블/뷰: Lineage 추적 대상
+
+쿼리 유형: CRUD, JOIN, CTE, 뷰 등 구분
+
+영향 컬럼: 파생 컬럼, 조건 컬럼 포함
+
+연산/함수: SUM, CASE, YEAR, 산술 연산 등
+
+연관 쿼리: INSERT INTO, MERGE, CTAS, UPDATE FROM 등
+
+자동화 가능성: SQL 문자열만으로 파싱 → 컬럼별 Lineage 자동 생성
+
+💡 Tip
+
+체크리스트를 기반으로 각 테이블/컬럼을 Lineage 맵핑하면 SQL 분석 자동화 가능
+
+CRUD/VIEW/CTE/MERGE/CASE 등 모든 패턴을 포함하면 거의 모든 쿼리 흐름 추적 가능
+
+원하면 제가 이 체크리스트를 엑셀/CSV 형태로 바로 사용 가능하게 만들어서
+소스 테이블별, 쿼리 유형별, Lineage 유형별로 정리된 자동 조사 템플릿까지 만들어드릴 수도 있습니다.
+
+그걸 만들어드릴까요?

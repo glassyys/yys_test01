@@ -1,0 +1,23 @@
+SELECT 'Sub 6 start : ' || to_char(SYSDATE,'YYYYMMDD HH24:MI:SS') FROM DUAL;
+
+-- ??? update
+merge into $T_MAP_ORA.MMAP_SSM_SCRB_S A
+using $T_MAP_ORA.MMAP_RT_EQP_MDL B
+on (
+    A.EQP_MDL_CD = B.EQP_MDL_CD
+    and A.YYYYMMDD = '${ODATE}'
+)
+
+when matched then
+update set
+    A.EQP_MDL_NM    = B.EQP_MDL_NM
+  , A.EQP_MDL_GRP   = B.EQP_MDL_GRP
+  , A.EQP_MDL_CHRTIC= B.EQP_MDL_CHRTIC
+  , A.EQP_MDL_SIZE  = B.EQP_MDL_SIZE
+  , A.EQP_MDL_NTWK  = B.EQP_MDL_NTWK
+  , A.MDL_FACTORY   = B.MDL_FACTORY
+;
+
+SELECT 'Sub 6 end : ' || to_char(SYSDATE,'YYYYMMDD HH24:MI:SS') FROM DUAL;
+
+SELECT 'Sub 7 start : ' || to_char(SYSDATE,'YYYYMMDD HH24:MI:SS') FROM DUAL;

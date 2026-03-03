@@ -1,0 +1,53 @@
+SELECT 'Sub 5 start : ' || to_char(SYSDATE,'YYYYMMDD HH24:MI:SS') FROM DUAL;
+
+merge into $T_MAP_ORA.MMAP_SSM_SCRB_S A
+using (
+    select
+        A.SHOP_ID,
+        A.SHOP_NM as REQ_SALE_ORG_NM,
+        A.ORG_CD as REQ_SALE_ORG_CD,
+        A.SUB_ORG_CD as REQ_SALE_SUB_ORG_CD,
+        A.LDONG_ID,
+        B.LDONG_CT_NM || ' ' || B.LDONG_CT_GUN_NM ||
+        B.UP_MYUN_DONG_NM ||
+        case when B.RI_NM <> '#' then ' ' || B.RI_NM else '' end as LDONG_NM,
+        D.RNG_ID,
+        D.RNG_NM,
+        D.CNTR_ORG_ID,
+        E.ORG_NM,
+        D.MKT_DIV_ORG_ID,
+        E.MKT_DIV_ORG_NM
+    from
+        $T_MAP_ORA.MMAP_SHOP_D A,
+        $T_MAP_ORA.MMAP_LDONG_D B,
+        $T_MAP_ORA.MMAP_RNG_LDONG C,
+        $T_MAP_ORA.MMAP_RNG_D D,
+        $T_MAP_ORA.MMAP_ORG E
+    where
+        A.LDONG_ID = B.LDONG_CD
+        and A.LDONG_ID = C.LDONG_ID
+        and C.RNG_ID = D.RNG_ID
+        and D.CNTR_ORG_ID = E.ORG_ID
+        and A.SHOP_ST_CD = '010'
+        and B.EFF_END_DT = '99991231'
+        and C.EFF_END_DT = '99991231'
+        and D.RNG_ST_CD = '010'
+        and E.DEL_FLAG = 'N'
+        and D.RNG_ID <> 'CB611680043'
+) B
+on (
+    A.REQ_SALE_ORG_ID = B.SHOP_ID
+    and A.YYYYMMDD = '${ODATE}'
+)
+
+when matched then
+update set
+    A.REQ_AREA_LDONG_CD      = B.LDONG_ID,
+    A.REQ_AREA_LDONG_NM      = B.LDONG_NM,
+    A.REQ_AREA_RNG_ID        = B.RNG_ID,
+    A.REQ_AREA_RNG_NM        = B.RNG_NM,
+    A.REQ_AREA_CNTR_ORG_ID   = B.CNTR_ORG_ID,
+    A.REQ_AREA_CNTR_ORG_NM   = B.ORG_NM,
+    A.REQ_AREA_MKT_DIV_ORG_ID= B.MKT_DIV_ORG_ID,
+    A.REQ_AREA_MKT_DIV_ORG_NM= B.MKT_DIV_ORG_NM
+;

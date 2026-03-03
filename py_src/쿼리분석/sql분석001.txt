@@ -1,0 +1,586 @@
+좋은 요구사항이에요. “운영 서버에 있는 SQL 포함 파일들에서 어떤 테이블을 어떻게(CRUD/JOIN/VIEW) 쓰고 있는지 자동으로 뽑고 싶다”는 거죠.
+아래는 실제로 바로 써먹을 수 있는 파이썬 스크립트를 기준으로 정리 + 코드까지 한 번에 드릴게요.
+
+전체 동작 개요
+
+이 파이썬 스크립트는 다음을 합니다 👇
+
+실행 방식
+
+python sql_table_analyzer.py /분석할/서버/디렉토리
+
+
+지정한 디렉토리 하위의 모든 파일을 재귀적으로 탐색
+
+파일 내용 중 SQL 구문에서
+
+CRUD : SELECT / INSERT / UPDATE / DELETE
+
+테이블 처리 : FROM / JOIN / INTO / UPDATE / VIEW
+
+SQL 행 안에서
+
+"${T" 로 시작하고
+
+"." 이 포함된 단어를 찾음
+
+테이블명 파싱 규칙
+
+${T스키마명}.테이블명
+
+
+→ 결과 저장 방식
+| 디렉토리 | 파일명 | CRUD | 스키마 | 테이블명 |
+
+파이썬 소스 코드
+
+아래 파일 그대로 저장하세요.
+
+파일명 예시
+sql_table_analyzer.py
+
+import os
+import sys
+import re
+
+# CRUD 키워드
+CRUD_KEYWORDS = {
+    "SELECT": "SELECT",
+    "INSERT": "INSERT",
+    "UPDATE": "UPDATE",
+    "DELETE": "DELETE"
+}
+
+# 테이블 관련 키워드
+TABLE_KEYWORDS = [
+    "FROM",
+    "JOIN",
+    "INTO",
+    "UPDATE",
+    "VIEW"
+]
+
+# ${Txxx}.table 형태 추출
+TABLE_PATTERN = re.compile(r"(\$\{T[^}]+\})\.([A-Za-z0-9_]+)", re.IGNORECASE)
+
+
+def detect_crud(line: str):
+    upper = line.upper()
+    for key in CRUD_KEYWORDS:
+        if re.search(rf"\b{key}\b", upper):
+            return CRUD_KEYWORDS[key]
+    return None
+
+
+def analyze_file(file_path, base_dir):
+    results = []
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                crud = detect_crud(line)
+                if not crud:
+                    continue
+
+                upper_line = line.upper()
+                if not any(k in upper_line for k in TABLE_KEYWORDS):
+                    continue
+
+                for match in TABLE_PATTERN.finditer(line):
+                    schema_raw = match.group(1)
+                    table_name = match.group(2)
+
+                    schema = schema_raw.replace("${", "").replace("}", "")
+
+                    results.append({
+                        "directory": os.path.relpath(os.path.dirname(file_path), base_dir),
+                        "file": os.path.basename(file_path),
+                        "crud": crud,
+                        "schema": schema,
+                        "table": table_name
+                    })
+    except Exception as e:
+        print(f"파일 읽기 실패: {file_path} ({e})")
+
+    return results
+
+
+def analyze_directory(target_dir):
+    all_results = []
+
+    for root, _, files in os.walk(target_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            all_results.extend(analyze_file(file_path, target_dir))
+
+    return all_results
+
+
+def print_result(results):
+    print("디렉토리 | 파일명 | CRUD | 스키마 | 테이블명")
+    print("-" * 80)
+
+    for r in results:
+        print(
+            f"{r['directory']} | "
+            f"{r['file']} | "
+            f"{r['crud']} | "
+            f"{r['schema']} | "
+            f"{r['table']}"
+        )
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("사용법: python sql_table_analyzer.py <서버디렉토리>")
+        sys.exit(1)
+
+    target_directory = sys.argv[1]
+
+    if not os.path.isdir(target_directory):
+        print("유효한 디렉토리가 아닙니다.")
+        sys.exit(1)
+
+    results = analyze_directory(target_directory)
+    print_result(results)
+
+예시 SQL → 추출 결과
+SQL 예시
+SELECT *
+FROM ${TSALES}.order_master a
+JOIN ${TCOMMON}.user_info b
+ON a.user_id = b.user_id
+
+결과
+디렉토리 | 파일명 | CRUD   | 스키마  | 테이블명
+------------------------------------------------
+sql     | test.sql | SELECT | TSALES  | order_master
+sql     | test.sql | SELECT | TCOMMON | user_info
+
+확장 가능 포인트 (원하면 바로 해줄게요)
+
+CSV / Excel 파일로 결과 저장
+
+한 파일에서 CRUD 여러 개 분리 추적
+
+멀티라인 SQL (CTE, 서브쿼리) 정밀 분석
+
+VIEW 정의 (CREATE VIEW) 별도 구분
+
+대소문자 / 주석 제거 로직 강화
+
+원하시면
+👉 “CSV로 저장해줘”
+👉 “JOIN만 따로 보고 싶어”
+👉 “대상 파일 확장자 제한(.sql, .xml, .py)”
+
+같이 딱 맞게 더 다듬어줄게요 👍
+
+CSV / Excel 파일로 결과 저장
+
+한 파일에서 CRUD 여러 개 분리 추적
+
+멀티라인 SQL (CTE, 서브쿼리) 정밀 분석
+
+VIEW 정의 (CREATE VIEW) 별도 구분
+
+대소문자 / 주석 제거 로직 강화
+
+좋다, 이건 운영/감사/영향도 분석용으로 충분히 실무급으로 끌어올리는 요구야 👍
+아래는 네가 요청한 **5가지 전부 반영한 “강화 버전 파이썬 소스”**야.
+
+반영된 기능 요약
+
+✅ CSV / Excel(xlsx) 저장
+✅ 한 파일 내 여러 CRUD 분리 추적
+✅ 멀티라인 SQL (CTE, 서브쿼리) 분석
+✅ CREATE VIEW 정의 별도 구분
+✅ 주석 제거 + 대소문자 정규화 로직 강화
+
+출력 컬럼 구조
+컬럼명	설명
+directory	파일이 위치한 디렉토리
+file	파일명
+sql_type	SELECT / INSERT / UPDATE / DELETE / VIEW
+operation	FROM / JOIN / INTO / UPDATE / VIEW
+schema	${Txxx} → Txxx
+table	테이블명
+raw_sql	해당 SQL 블록(정제 후)
+실행 방법
+python sql_table_analyzer_adv.py /서버/디렉토리
+
+
+실행 후 생성 파일
+
+sql_analysis_result.csv
+sql_analysis_result.xlsx
+
+파이썬 소스 (고급 분석 버전)
+
+👉 파일명: sql_table_analyzer_adv.py
+
+import os
+import sys
+import re
+import csv
+from openpyxl import Workbook
+
+# ===============================
+# 정규식 패턴 정의
+# ===============================
+
+# 주석 제거
+SINGLE_LINE_COMMENT = re.compile(r"--.*?$", re.MULTILINE)
+MULTI_LINE_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+# SQL 블록 분리 (CTE 포함)
+SQL_BLOCK_PATTERN = re.compile(
+    r"(WITH\s+.*?SELECT|SELECT|INSERT|UPDATE|DELETE|CREATE\s+VIEW).*?(;|$)",
+    re.IGNORECASE | re.DOTALL
+)
+
+# CRUD / VIEW
+SQL_TYPE_PATTERN = re.compile(
+    r"\b(SELECT|INSERT|UPDATE|DELETE|CREATE\s+VIEW)\b",
+    re.IGNORECASE
+)
+
+# 테이블 접근 키워드
+OPERATION_PATTERN = re.compile(
+    r"\b(FROM|JOIN|INTO|UPDATE|VIEW)\b",
+    re.IGNORECASE
+)
+
+# ${Txxx}.table
+TABLE_PATTERN = re.compile(
+    r"(\$\{T[^}]+\})\.([A-Za-z0-9_]+)",
+    re.IGNORECASE
+)
+
+
+# ===============================
+# 유틸 함수
+# ===============================
+
+def remove_comments(sql: str) -> str:
+    sql = MULTI_LINE_COMMENT.sub("", sql)
+    sql = SINGLE_LINE_COMMENT.sub("", sql)
+    return sql
+
+
+def normalize_sql(sql: str) -> str:
+    sql = remove_comments(sql)
+    sql = re.sub(r"\s+", " ", sql)
+    return sql.strip()
+
+
+def detect_sql_type(sql: str) -> str:
+    match = SQL_TYPE_PATTERN.search(sql)
+    if not match:
+        return None
+    return match.group(1).upper().replace(" ", "_")
+
+
+def extract_operations(sql: str):
+    return set(op.upper() for op in OPERATION_PATTERN.findall(sql))
+
+
+# ===============================
+# 파일 분석
+# ===============================
+
+def analyze_file(file_path, base_dir):
+    results = []
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception:
+        return results
+
+    content = normalize_sql(content)
+
+    for block in SQL_BLOCK_PATTERN.finditer(content):
+        sql_block = block.group(0)
+
+        sql_type = detect_sql_type(sql_block)
+        if not sql_type:
+            continue
+
+        operations = extract_operations(sql_block)
+
+        for match in TABLE_PATTERN.finditer(sql_block):
+            schema_raw = match.group(1)
+            table_name = match.group(2)
+            schema = schema_raw.replace("${", "").replace("}", "")
+
+            for op in operations:
+                results.append({
+                    "directory": os.path.relpath(os.path.dirname(file_path), base_dir),
+                    "file": os.path.basename(file_path),
+                    "sql_type": "VIEW" if "CREATE_VIEW" in sql_type else sql_type,
+                    "operation": op,
+                    "schema": schema,
+                    "table": table_name,
+                    "raw_sql": sql_block
+                })
+
+    return results
+
+
+def analyze_directory(target_dir):
+    all_results = []
+
+    for root, _, files in os.walk(target_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            all_results.extend(analyze_file(file_path, target_dir))
+
+    return all_results
+
+
+# ===============================
+# CSV / Excel 저장
+# ===============================
+
+def save_csv(results, filename="sql_analysis_result.csv"):
+    with open(filename, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=results[0].keys()
+        )
+        writer.writeheader()
+        writer.writerows(results)
+
+
+def save_excel(results, filename="sql_analysis_result.xlsx"):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "SQL Analysis"
+
+    headers = list(results[0].keys())
+    ws.append(headers)
+
+    for r in results:
+        ws.append([r[h] for h in headers])
+
+    wb.save(filename)
+
+
+# ===============================
+# 메인
+# ===============================
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("사용법: python sql_table_analyzer_adv.py <서버디렉토리>")
+        sys.exit(1)
+
+    target_directory = sys.argv[1]
+
+    if not os.path.isdir(target_directory):
+        print("유효한 디렉토리가 아닙니다.")
+        sys.exit(1)
+
+    results = analyze_directory(target_directory)
+
+    if not results:
+        print("분석 결과 없음")
+        sys.exit(0)
+
+    save_csv(results)
+    save_excel(results)
+
+    print(f"분석 완료: {len(results)}건")
+    print(" - sql_analysis_result.csv")
+    print(" - sql_analysis_result.xlsx")
+
+이 스크립트로 가능한 것들 (실무 활용)
+
+✔ 서비스 영향도 분석
+✔ 테이블 사용 현황 정리
+✔ VIEW 의존성 추적
+✔ 운영 SQL 리팩토링 대상 선별
+✔ 개인정보 테이블 접근 감사
+
+다음 단계로 확장 가능 (원하면 바로 구현)
+
+CTE 내부 테이블 별도 컬럼 분리
+
+서브쿼리 depth 컬럼 추가
+
+${T} 아닌 일반 스키마 지원
+
+특정 스키마 제외 옵션
+
+실행 옵션으로 --csv-only / --excel-only
+
+원하면
+👉 “대용량 파일 성능 튜닝”
+👉 “Vertica / Oracle / MySQL 전용 룰”
+👉 “사내 규칙 맞춘 컬럼 구조”
+
+이렇게 말해줘. 여기까지 온 김에 끝판왕으로 같이 만들어보자 🔥
+
+"${T" 가 있는 행중 라인중 패턴으로 찾은내용이  "${T_TDW}.TB_NAME AAA"라면  T_TDW 이 스키마이고 TB_NAME 이 테이블명으로 처리해줘 결과보니 쿼리내용이 전부 나온것 같아
+
+아, 지금 상황 정확히 이해했어 👍
+문제 핵심은 이거야:
+
+${T} 패턴을 찾긴 했는데
+현재 로직이 SQL 블록 전체를 raw_sql로 저장하다 보니
+👉 *“${T가 있는 특정 라인 기준으로만 추출”*이 안 되고
+👉 테이블/스키마도 라인 단위가 아니라 블록 단위로 과도하게 매칭되고 있음
+
+그리고 테이블 표기 형태도 하나 더 고려해야 하는 상태지 👇
+
+${T_TDW}.TB_NAME AAA
+
+
+이 경우
+
+스키마 → T_TDW
+
+테이블 → TB_NAME
+
+AAA는 alias (무시)
+
+1️⃣ 정확한 처리 규칙 정리 (수정 반영)
+대상 라인 조건
+
+라인 안에 ${T가 반드시 포함
+
+그 라인에서만 테이블 추출
+
+테이블 패턴 (정확히)
+${T스키마}.테이블명 [alias]
+
+
+👉 alias 는 있어도 되고 없어도 됨
+👉 alias 는 결과에 저장 ❌
+
+2️⃣ 핵심 수정 포인트 요약
+❌ 기존 문제
+
+SQL 블록 전체에서 테이블 패턴 검색
+
+raw_sql에 블록 전체 저장 → “쿼리 전부 나온다” 느낌
+
+✅ 수정 방향
+
+주석 제거 후에도 라인 단위 유지
+
+${T가 있는 라인만 분석
+
+raw_sql → 해당 라인만 저장
+
+alias 분리 허용
+
+3️⃣ 수정된 테이블 추출 정규식 (중요)
+TABLE_PATTERN = re.compile(
+    r"(\$\{T[^}]+\})\.([A-Za-z0-9_]+)(?:\s+[A-Za-z0-9_]+)?",
+    re.IGNORECASE
+)
+
+
+✔ ${T_TDW}.TB_NAME
+✔ ${T_TDW}.TB_NAME AAA
+✔ ${T_TDW}.TB_NAME AS AAA (AS 있어도 무시됨)
+
+4️⃣ analyze_file 함수 핵심 수정본 (중요)
+
+👉 이 부분만 교체해도 동작 완전히 달라짐
+
+def analyze_file(file_path, base_dir):
+    results = []
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+    except Exception:
+        return results
+
+    cleaned_lines = []
+    for line in lines:
+        line = MULTI_LINE_COMMENT.sub("", line)
+        line = SINGLE_LINE_COMMENT.sub("", line)
+        if line.strip():
+            cleaned_lines.append(line.rstrip())
+
+    current_sql_type = None
+
+    for line in cleaned_lines:
+        upper_line = line.upper()
+
+        # SQL 타입 갱신
+        type_match = SQL_TYPE_PATTERN.search(upper_line)
+        if type_match:
+            current_sql_type = type_match.group(1).upper().replace(" ", "_")
+
+        # ${T 가 없는 라인은 스킵
+        if "${T" not in line:
+            continue
+
+        operations = OPERATION_PATTERN.findall(upper_line)
+        if not operations:
+            continue
+
+        for match in TABLE_PATTERN.finditer(line):
+            schema_raw = match.group(1)
+            table_name = match.group(2)
+
+            schema = schema_raw.replace("${", "").replace("}", "")
+
+            for op in operations:
+                results.append({
+                    "directory": os.path.relpath(os.path.dirname(file_path), base_dir),
+                    "file": os.path.basename(file_path),
+                    "sql_type": "VIEW" if current_sql_type == "CREATE_VIEW" else current_sql_type,
+                    "operation": op.upper(),
+                    "schema": schema,
+                    "table": table_name,
+                    "raw_sql": line.strip()
+                })
+
+    return results
+
+5️⃣ 결과 예시 (이제 이렇게 나옴)
+SQL
+FROM ${T_TDW}.TB_NAME AAA
+JOIN ${T_MART}.USER_INFO U
+
+결과
+directory	file	sql_type	operation	schema	table	raw_sql
+sql	a.sql	SELECT	FROM	T_TDW	TB_NAME	FROM ${T_TDW}.TB_NAME AAA
+sql	a.sql	SELECT	JOIN	T_MART	USER_INFO	JOIN ${T_MART}.USER_INFO U
+
+✔ 쿼리 전체 ❌
+✔ 라인 단위 정확 추출 ⭕
+✔ alias 자동 제거 ⭕
+
+6️⃣ 지금 구조의 장점 (중요)
+
+운영 SQL 영향도 분석에 딱 맞음
+
+엑셀에서 바로 Pivot 가능
+
+“이 테이블이 어디서 JOIN 되었나?” 바로 추적 가능
+
+VIEW / SELECT / UPDATE 정확 분리
+
+다음으로 하면 딱 좋은 확장 (추천)
+
+alias 컬럼 별도 저장 (alias)
+
+CTE 이름 제외 처리
+
+${T} 아닌 일반 schema.table 옵션 추가
+
+JOIN 종류 (LEFT / INNER) 컬럼화
+
+원하면
+👉 “alias 컬럼도 추가해줘”
+👉 “CTE 테이블은 제외하고 싶어”
+👉 “FROM 기준 대표 테이블 표시해줘”
+
+이렇게 말해. 지금 이미 **실무 끝판왕 80%**까지 왔어 🔥

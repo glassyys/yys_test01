@@ -1,0 +1,90 @@
+파이썬으로 쿼리추출 소스코드 요청
+1.추출 대상 확장자
+.sh
+.hql
+.sql
+.uld
+.ld
+2. 추출 대상 쿼리 유형
+CREATE
+CREATE VIEW
+CREATE TEMPORARY VIEW
+ALTER VIEW
+REPLACE VIEW
+MERGE
+UPSERT
+INSERT
+UPDATE
+DELETE
+SELECT
+CTAS (CREATE TABLE AS)
+-세미콜론(;) 기준으로 완전 문장 추출
+
+3. dat 생성 규칙
+저장 위치:
+현재실행디렉토리/out/
+파일명:
+프로그램명_소스마지막디렉토리_YYYYMMDD_HHMMSS.dat
+예:
+sql_extractor_projectA_20260215_091530.dat
+
+4. dat 컬럼 레이아웃 및 구분자
+구분자 "|"로path는 절대경로로 아래와 같은 레이아웃으로 생서
+file_path|file_name|path_with_file|query_text
+
+-파일경로/파일명은 쿼리문 행개수만큼 중복 생성됨
+
+파일생성시 아래쿼리의 경우 
+select col_1
+      ,col_2
+ from tb_1
+where a='1'
+아래와 같은으로 생성하도록 쿼리 보완 전체코드 요청
+file_path|file_name|path_with_file|select col_1
+file_path|file_name|path_with_file|      ,col_2
+file_path|file_name|path_with_file| from tb_1
+file_path|file_name|path_with_file|where a='1'
+
+
+쿼리 유형 컬럼 추가 (C/R/U/D 자동분류)하고 파일 건수 결과도 출력하도록 수정한 전체소스
+
+아래 단계로 확장요청
+WITH 절 포함 강화 정규식으로 보완하고
+파일의 전체행건수도 추가로 출력하는 소스코드 전체 요청
+
+소스유지하고 구분자만 "^"으로 변경한 전체소스
+
+기존소스 유지하고 세미콜론(;) 기준 완전 문장 추출할때 ; 도 쿼리문생성시 포함해서 추출한 전체소스
+
+기존소스 유지하고 쿼리문의 ";"도 "query_text" 항목에 추가하여 파일생성하도록 수정한 전체소스
+
+기존소스 유지하고 파일명만 아래기준으로 수정한 전체소스
+dat 생성 규칙
+저장 위치:
+현재실행디렉토리/out/
+파일명:
+프로그램명_소스마지막디렉토리_YYYYMMDD_HHMMSS.dat
+예:
+sql_extractor_projectA_20260215_091530.dat
+
+-------------------
+기존소스 유지하고 아래내용 반영한 전체소스
+WITH 다중 CTE 완전 강화 버전
+주석 제거 후 추출
+--------------------
+필요하면 다음도 확장 가능합니다:
+
+WITH 다중 CTE 완전 강화 버전
+문자열 내부 세미콜론 무시 처리
+주석 제거 후 추출
+대용량 파일 속도 최적화
+병렬 처리 버전
+다음 단계 말씀 주세요 🚀
+
+
+사용 DB Hive / Vertica / Oracle / MySQL
+모두 추출가능하도록
+
+🔥 리니지 분석 최적화 버전
+🔥 사용 테이블 추출
+🔥 세미콜론 없는 Hive 대응
