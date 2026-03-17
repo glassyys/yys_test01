@@ -1,7 +1,6 @@
 ## python3 /home/p190872/chksrc/sql_lng_015_with.py /home/p190872/chksrc/test --mode SIMPLE --db --conf /home/p190872/chksrc/mysql.conf
 ## python3 /home/p190872/chksrc/sql_lng_015_with.py /home/p190872/chksrc/test --mode DETAIL --db
 ## python3 /home/p190872/chksrc/sql_lng_015_with.py /home/p190872/chksrc/SIDHUB --mode DETAIL --db
-## python3 /home/p190872/chksrc/sql_lng_015_with.py /NAS/MIDP/DBMSVC/MIDP/SID/SRC/SIDHUB/mi --mode SIMPLE --db
 ## python3 /home/p190872/chksrc/sql_lng_015_with.py /NAS/MIDP/DBMSVC/MIDP/SID/SRC/SIDHUB --mode SIMPLE --db
 ## python3 /home/p190872/chksrc/sql_lng_015_with.py /NAS/MIDP/DBMSVC/MIDP/SID/SRC/SIDHUB --mode DETAIL --db
 ## python3 /home/p190872/chksrc/sql_lng_015_with.py /NAS/MIDP/DBMSVC/MIDP/TMT --mode SIMPLE --db
@@ -99,7 +98,7 @@
 # (미지정 시 실행 디렉토리의 mysql.conf 사용)
 #
 # 출력 컬럼:
-# base_directory, file_name, dir_file, crud_type, sql_typ,
+# abs_path, file, full_path, crud_type, sql_typ,
 # source_table, source_type(TABLE/CTE/TEMP),
 # target_table, target_type(TABLE/CTE/TEMP),
 # depth, src_schema, src_table, tgt_schema, tgt_table
@@ -174,9 +173,9 @@ _DDL_CREATE = """
 CREATE TABLE IF NOT EXISTS `{table}` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
   `run_id` VARCHAR(30) NOT NULL COMMENT '실행 타임스탬프(YYYYMMDD_HHMMSS)',
-  `base_directory` TEXT COMMENT '소스파일 디렉토리 경로',
-  `file_name` VARCHAR(500) COMMENT '파일명',
-  `dir_file` TEXT COMMENT '소스파일 전체경로',
+  `abs_path` TEXT COMMENT '소스파일 디렉토리 경로',
+  `file` VARCHAR(500) COMMENT '파일명',
+  `full_path` TEXT COMMENT '소스파일 전체경로',
   `crud_type` VARCHAR(1) COMMENT 'C/R/U/D',
   `sql_typ` VARCHAR(20) COMMENT 'INSERT/SELECT/UPDATE/DELETE/...',
   `source_table` VARCHAR(500) COMMENT '소스 테이블 (원본명)',
@@ -191,7 +190,7 @@ CREATE TABLE IF NOT EXISTS `{table}` (
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_run_id` (`run_id`),
-  KEY `idx_file_name` (`file_name`(191)),
+  KEY `idx_file` (`file`(191)),
   KEY `idx_src_table` (`src_table`(191)),
   KEY `idx_tgt_table` (`tgt_table`(191))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -200,7 +199,7 @@ CREATE TABLE IF NOT EXISTS `{table}` (
 
 _SQL_INSERT = """
 INSERT INTO `{table}`
-  (run_id, base_directory, file_name, dir_file, crud_type, sql_typ,
+  (run_id, abs_path, file, full_path, crud_type, sql_typ,
    source_table, source_type, target_table, target_type, depth,
    src_schema, src_table, tgt_schema, tgt_table)
 VALUES
@@ -1048,11 +1047,11 @@ def compute_cte_depths(cte_map):
 # 17. 출력 행 생성 (치환 함수로 변경)
 # ============================================================
 def build_rows(cte_map, sources_raw, targets, crud_type, sql_typ,
-               base_directory, file_name, dir_file, mode,
+               abs_path, file, full_path, mode,
                cte_names_upper, temp_registry):
     """
     행 구조 (인덱스 0~13):
-      [0]base_directory [1]file_name [2]dir_file
+      [0]abs_path [1]file [2]full_path
       [3]crud_type [4]sql_typ
       [5]source_table [6]source_type
       [7]target_table [8]target_type
@@ -1073,7 +1072,7 @@ def build_rows(cte_map, sources_raw, targets, crud_type, sql_typ,
         src_schema, src_table = resolve_and_split_schema_table(src)
         tgt_schema, tgt_table = resolve_and_split_schema_table(tgt)
         rows.append([
-            base_directory, file_name, dir_file, crud_type, sql_typ,
+            abs_path, file, full_path, crud_type, sql_typ,
             src, src_type,
             tgt, tgt_type,
             d,
@@ -1163,13 +1162,13 @@ def main():
     temp_registry = build_temp_registry(SOURCE_DIR)
     rows_buffer = []
     for root, _, files in os.walk(SOURCE_DIR):
-        for file_name in files:
-            if not file_name.lower().endswith(('.sh', '.hql', '.sql', '.uld', '.ld')):
+        for file in files:
+            if not file.lower().endswith(('.sh', '.hql', '.sql', '.uld', '.ld')):
                 continue
             total_files += 1
-            dir_file = os.path.join(root, file_name)
-            base_directory = os.path.abspath(root)
-            queries, file_lines = extract_queries_from_file(dir_file)
+            full_path = os.path.join(root, file)
+            abs_path = os.path.abspath(root)
+            queries, file_lines = extract_queries_from_file(full_path)
             total_file_lines += file_lines
             total_queries += len(queries)
             for query in queries:
@@ -1184,7 +1183,7 @@ def main():
                 rows = build_rows(
                     cte_map, sources_raw, targets,
                     crud_type, sql_typ,
-                    base_directory, file_name, dir_file,
+                    abs_path, file, full_path,
                     MODE,
                     cte_names_upper,
                     temp_registry
@@ -1202,7 +1201,7 @@ def main():
     with open(output_path, 'w', newline='', encoding='utf-8') as out_file:
         writer = csv.writer(out_file, delimiter=",")
         writer.writerow([
-            "base_directory", "file_name", "dir_file",
+            "abs_path", "file", "full_path",
             "crud_type", "sql_typ",
             "source_table", "source_type",
             "target_table", "target_type",
