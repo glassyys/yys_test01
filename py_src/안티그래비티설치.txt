@@ -1,0 +1,1 @@
+"C:\Users\Name\AppData\Local\Programs\antigravity\Antigravity.exe" --no-sandbox --disable-gpu
