@@ -1,6 +1,5 @@
 "C:\Users\Name\AppData\Local\Programs\antigravity\Antigravity.exe" --no-sandbox --disable-gpu
 
-
 Developer: Reload Window 해도 계속되는데 분석을 안하게 하는 방법과 분석을 다시 하게 하는 명령
 
 창을 다시 로드해도 로딩 루프가 계속되는 것은 안티그래비티의 파이썬 분석 도구(Pyrefly나 기본 언어 서버)가 해당 파일의 구문이나 라이브러리를 해석하느라 멈추지 않는 현상입니다.
