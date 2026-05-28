@@ -1,17 +1,17 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ===============================================================
 # sql_find_v001.py
 #
 # 실행예시:
-#   python sql_find_v001.py <검색대상_디렉토리> <CSV파일명> <검색할_칼럼명> [--conf mysql.conf 경로]
+#   python3 sql_find_v001.py <검색대상_디렉토리> <CSV파일명> <검색할_칼럼명> [--conf mysql.conf 경로]
 #
 # 예시:
-#   python sql_find_v001.py /NAS/MIDP/DBMSVC/MIDP/SID/SRC/SIDHUB target_tables.csv target_table
+#   python3 sql_find_v001.py /NAS/MIDP/DBMSVC/MIDP/SID/SRC/SIDHUB target_tables.csv target_table
 #
 # 설명:
 # 2. find소스(sql_find_v001.py)
-# 1) 실행시 검색할디렉토리와 csv파일명 칼럼명 파라미터로 설정 
+# 1) 실행시 검색할디렉토리와 csv파일명 칼럼명 파라미터로 설정
 # 2) 소스하위디렉토리 out 내부의 .csv 파일을 읽기
 # 3) 첫번재 행을 칼럼명으로 인식해서 실행시 지정된 칼럼명을 지정하면 첫번째 이후 행의 단어리스트를 메모리저장후
 # 4) 실행시 디렉토리하위 소스 내용 읽는다
@@ -22,23 +22,22 @@
 import os
 import sys
 import csv
-import re
-import codecs
+import configparser
 from datetime import datetime
 
 # ============================================================
 # 프로그램명 / 디렉토리 경로 설정
 # ============================================================
-PROGRAM_NAME = os.path.splitext(os.path.basename(sys.argv[0]))[0]
-SCRIPT_DIR   = os.path.dirname(os.path.abspath(sys.argv[0]))
-OUT_DIR      = os.path.join(SCRIPT_DIR, "out")
+PROGRAM_NAME    = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+SCRIPT_DIR      = os.path.dirname(os.path.abspath(sys.argv[0]))
+OUT_DIR         = os.path.join(SCRIPT_DIR, "out")
 MYSQL_CONF_FILE = "mysql.conf"
 
 # 대상 확장자 규칙 (기존 소스 기준)
 TARGET_EXTENSIONS = {".sql", ".hql", ".uld", ".ld", ".sh"}
 
 # ============================================================
-# MySQL 드라이버 동적 로드
+# MySQL 드라이버 동적 로드  ※ sql_unload_v001.py 와 동일한 방식
 # ============================================================
 _MYSQL_DRIVER = None
 
@@ -56,7 +55,8 @@ def _detect_mysql_driver():
 
 _detect_mysql_driver()
 
-def _mysql_connect(conf):
+
+def _mysql_connect(conf: dict):
     host     = conf.get("host",     "localhost")
     port     = int(conf.get("port", 3306))
     user     = conf.get("user",     "")
@@ -78,12 +78,15 @@ def _mysql_connect(conf):
             charset=charset, autocommit=False
         )
     else:
-        raise ImportError("MySQL 드라이버가 없습니다. pip install pymysql 또는 mysql-connector-python을 설치하세요.")
+        raise ImportError(
+            "MySQL 드라이버가 없습니다. "
+            "pip install pymysql 또는 pip install mysql-connector-python 을 설치하세요."
+        )
 
 # ============================================================
-# mysql.conf 로드
+# mysql.conf 로드  ※ sql_unload_v001.py 와 동일한 방식
 # ============================================================
-def load_mysql_conf(explicit_path=None):
+def load_mysql_conf(explicit_path=None) -> tuple:
     path = explicit_path if explicit_path else os.path.join(os.getcwd(), MYSQL_CONF_FILE)
     path = os.path.abspath(path)
     if not os.path.isfile(path):
@@ -91,39 +94,32 @@ def load_mysql_conf(explicit_path=None):
         if os.path.isfile(fallback_path):
             path = fallback_path
         else:
-            return None, "mysql.conf 파일을 찾을 수 없습니다: {0}".format(path)
+            return None, f"mysql.conf 파일을 찾을 수 없습니다: {path}"
 
-    # Python 2.7 ConfigParser 호환성
+    cp = configparser.ConfigParser()
     try:
-        import ConfigParser
-        cp = ConfigParser.ConfigParser()
-    except ImportError:
-        import configparser
-        cp = configparser.ConfigParser()
-        
-    try:
-        with codecs.open(path, "r", encoding="utf-8") as f:
-            if hasattr(cp, 'read_file'):
-                cp.read_file(f)
-            else:
-                cp.readfp(f)
-    except Exception, e:
-        return None, "mysql.conf 읽기 오류: {0}".format(e)
+        cp.read(path, encoding="utf-8")
+    except Exception as e:
+        return None, f"mysql.conf 읽기 오류: {e}"
 
     if not cp.has_section("mysql"):
         return None, "mysql.conf 에 [mysql] 섹션이 없습니다."
 
-    conf = dict(cp.items("mysql"))
+    conf    = dict(cp["mysql"])
     missing = [k for k in ("host", "user", "password", "database") if not conf.get(k)]
     if missing:
-        return None, "mysql.conf 필수 항목 누락: {0}".format(", ".join(missing))
+        return None, f"mysql.conf 필수 항목 누락: {', '.join(missing)}"
     return conf, None
 
 # ============================================================
 # DDL / INSERT SQL 정의
 # ============================================================
+_DDL_DROP = """
+DROP TABLE IF EXISTS `{table}`;
+"""
+
 _DDL_CREATE = """
-CREATE TABLE IF NOT EXISTS `{table}` (
+CREATE TABLE `{table}` (
   `id`             BIGINT        NOT NULL AUTO_INCREMENT,
   `run_id`         VARCHAR(30)   NOT NULL  COMMENT '실행 타임스탬프(YYYYMMDD_HHMMSS)',
   `base_directory` VARCHAR(500)  NOT NULL  COMMENT '소스파일 디렉토리 경로',
@@ -135,9 +131,9 @@ CREATE TABLE IF NOT EXISTS `{table}` (
   `matched_word`   VARCHAR(500)  NOT NULL  COMMENT '매치된 단어',
   `op_dtm`         DATETIME      NOT NULL  COMMENT '처리일시',
   PRIMARY KEY (`id`),
-  KEY `idx_run_id`    (`run_id`),
-  KEY `idx_file`      (`file_name`(191)),
-  KEY `idx_word`      (`matched_word`(191))
+  KEY `idx_run_id` (`run_id`),
+  KEY `idx_file`   (`file_name`(191)),
+  KEY `idx_word`   (`matched_word`(191))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='소스 키워드 매칭 정보';
 """
 
@@ -150,65 +146,105 @@ VALUES
 """
 
 # ============================================================
-# 동적 테이블명 생성 함수 (기존 규칙 기준)
+# 라인에서 주석 제거 함수
 # ============================================================
-def build_dynamic_table_name(source_dir):
-    last_dir = os.path.basename(os.path.normpath(source_dir))
-    return "{0}_{1}".format(PROGRAM_NAME, last_dir)
+def remove_comments_from_line(line: str, file_ext: str) -> str:
+    """
+    파일 타입별로 주석을 제거합니다.
+    - SQL 계열 (.sql, .hql, .uld, .ld): "--" 기준으로 주석 제거
+    - Shell (.sh): "#" 기준으로 주석 제거
+    """
+    if not line:
+        return line
+    
+    file_ext_lower = file_ext.lower()
+    
+    # SQL 계열 파일: "--" 주석 제거
+    if file_ext_lower in {".sql", ".hql", ".uld", ".ld"}:
+        comment_pos = line.find("--")
+        if comment_pos != -1:
+            line = line[:comment_pos]
+    
+    # Shell 파일: "#" 주석 제거 (문자열 내부의 "#"는 제외하기 위해 간단히 처리)
+    elif file_ext_lower == ".sh":
+        comment_pos = line.find("#")
+        if comment_pos != -1:
+            line = line[:comment_pos]
+    
+    return line.strip()
 
 # ============================================================
-# DB 적재 (CREATE IF NOT EXISTS -> BATCH INSERT)
+# 동적 테이블명 생성 함수 (기존 규칙 기준)
 # ============================================================
-def db_insert_matches(rows_buffer, run_id, op_dtm, mysql_conf, source_dir):
+def build_dynamic_table_name(source_dir: str) -> str:
+    last_dir = os.path.basename(os.path.normpath(source_dir))
+    return f"{PROGRAM_NAME}_{last_dir}"
+
+# ============================================================
+# DB 적재 (CREATE IF NOT EXISTS → BATCH INSERT)
+# ============================================================
+def db_insert_matches(rows_buffer: list, run_id: str, op_dtm: str,
+                      mysql_conf: dict, source_dir: str) -> int:
     table_name = build_dynamic_table_name(source_dir)
+    conn   = None
+    cursor = None
     try:
         conn   = _mysql_connect(mysql_conf)
         cursor = conn.cursor()
 
+        # 기존 테이블 DROP
+        cursor.execute(_DDL_DROP.format(table=table_name))
+        conn.commit()
+
+        # 새로운 테이블 CREATE
         cursor.execute(_DDL_CREATE.format(table=table_name))
         conn.commit()
 
-        batch = []
-        for r in rows_buffer:
-            batch.append((
+        batch = [
+            (
                 run_id,
                 r["base_directory"], r["file_name"], r["dir_file"],
                 r["line_no"],        r["line_content"],
                 r["search_column"],  r["matched_word"],
                 op_dtm,
-            ))
+            )
+            for r in rows_buffer
+        ]
 
         if batch:
             cursor.executemany(_SQL_INSERT.format(table=table_name), batch)
             conn.commit()
 
-        inserted = len(batch)
-        cursor.close()
-        conn.close()
-        return inserted, None
+        return len(batch)
 
-    except Exception, e:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        try:
-            cursor.close()
-            conn.close()
-        except Exception:
-            pass
-        sys.stderr.write("[ERROR] DB 적재 실패: %s\n" % str(e))
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         raise e
+    finally:
+        if cursor:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 # ============================================================
 # 인수 파싱
 # ============================================================
-def parse_args():
+def parse_args() -> tuple:
     args = sys.argv[1:]
-    search_dir = None
+    search_dir   = None
     csv_filename = None
-    column_name = None
-    conf_path = None
+    column_name  = None
+    conf_path    = None
 
     i = 0
     while i < len(args):
@@ -217,7 +253,7 @@ def parse_args():
                 conf_path = args[i + 1]
                 i += 2
             else:
-                sys.stderr.write("[오류] --conf 다음에는 mysql.conf 파일의 경로를 입력해 주십시오.\n")
+                print("[오류] --conf 다음에는 mysql.conf 파일의 경로를 입력해 주십시오.")
                 sys.exit(1)
         else:
             if search_dir is None:
@@ -229,12 +265,12 @@ def parse_args():
             i += 1
 
     if search_dir is None or csv_filename is None or column_name is None:
-        sys.stderr.write("사용법: python {0}.py <검색대상_디렉토리> <CSV파일명> <검색할_칼럼명> [--conf mysql.conf 경로]\n".format(PROGRAM_NAME))
+        print(f"사용법: python3 {PROGRAM_NAME}.py <검색대상_디렉토리> <CSV파일명> <검색할_칼럼명> [--conf mysql.conf 경로]")
         sys.exit(1)
 
     search_dir = os.path.abspath(search_dir)
     if not os.path.isdir(search_dir):
-        sys.stderr.write("[오류] 유효한 검색 디렉토리가 아닙니다: {0}\n".format(search_dir))
+        print(f"[오류] 유효한 검색 디렉토리가 아닙니다: {search_dir}")
         sys.exit(1)
 
     return search_dir, csv_filename, column_name, conf_path
@@ -249,82 +285,69 @@ def main():
 
     # DB 드라이버 검사
     if _MYSQL_DRIVER is None:
-        sys.stderr.write("[ERROR] MySQL 드라이버가 없습니다. pymysql 또는 mysql-connector-python을 설치하십시오.\n")
+        print("[ERROR] MySQL 드라이버가 없습니다. pymysql 또는 mysql-connector-python을 설치하십시오.")
         sys.exit(1)
 
     # DB 설정 파일 로드
     mysql_conf, err = load_mysql_conf(conf_path)
     if err:
-        sys.stderr.write("[ERROR] {0}\n".format(err))
+        print(f"[ERROR] {err}")
         sys.exit(1)
 
     table_name = build_dynamic_table_name(search_dir)
-    
+
     print("=" * 60)
     print(" [소스 키워드 탐색 시작]")
     print("=" * 60)
-    print("  검색 대상 디렉토리 : {0}".format(search_dir))
-    print("  CSV 파일명         : {0}".format(csv_filename))
-    print("  검색 기준 칼럼명   : {0}".format(column_name))
-    print("  적재할 DB 테이블   : {0}.{1}".format(mysql_conf.get("database", ""), table_name))
-    print("  처리일시 (op_dtm)  : {0}".format(op_dtm))
+    print(f"  검색 대상 디렉토리 : {search_dir}")
+    print(f"  CSV 파일명         : {csv_filename}")
+    print(f"  검색 기준 칼럼명   : {column_name}")
+    print(f"  적재할 DB 테이블   : {mysql_conf.get('database', '')}.{table_name}")
+    print(f"  처리일시 (op_dtm)  : {op_dtm}")
     print("-" * 60)
 
     # 1. out 디렉토리 하위 특정 .csv 파일을 읽어 단어 리스트 추출
-    search_words = set()
     if not os.path.isdir(OUT_DIR):
-        sys.stderr.write("[ERROR] 'out' 디렉토리가 존재하지 않습니다: {0}\n".format(OUT_DIR))
-        sys.stderr.write("        먼저 sql_unload_v001.py 등으로 CSV 파일들을 생성하십시오.\n")
+        print(f"[ERROR] 'out' 디렉토리가 존재하지 않습니다: {OUT_DIR}")
+        print("        먼저 sql_unload_v001.py 등으로 CSV 파일들을 생성하십시오.")
         sys.exit(1)
 
     csv_path = os.path.join(OUT_DIR, csv_filename)
     if not os.path.isfile(csv_path):
-        sys.stderr.write("[ERROR] 지정한 CSV 파일이 존재하지 않습니다: {0}\n".format(csv_path))
+        print(f"[ERROR] 지정한 CSV 파일이 존재하지 않습니다: {csv_path}")
         sys.exit(1)
 
     print("[INFO] CSV 단어 리스트 추출 중...")
-    
-    try:
-        with codecs.open(csv_path, "r", encoding="utf-8-sig") as f:
-            def utf8_encoder(unicode_csv_data):
-                for line in unicode_csv_data:
-                    yield line.encode('utf-8')
-                    
-            if sys.version_info[0] < 3:
-                reader = csv.DictReader(utf8_encoder(f))
-            else:
-                reader = csv.DictReader(f)
 
+    search_words = set()
+    try:
+        with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
             count_in_file = 0
             for row in reader:
                 val = row.get(column_name)
-                if val is None and sys.version_info[0] < 3:
-                    val = row.get(column_name.encode('utf-8'))
-                    
                 if val:
-                    if sys.version_info[0] < 3:
-                        val = val.decode('utf-8')
                     val_clean = val.strip()
                     if val_clean:
                         search_words.add(val_clean)
                         count_in_file += 1
-            
-            print("  - {0}: '{1}' 컬럼에서 {2:,}개 단어 추출 완료".format(csv_filename, column_name, count_in_file))
-    except Exception, e:
-        sys.stderr.write("  - [WARN] {0} 파일 읽기 실패: {1}\n".format(csv_filename, e))
+        print(f"  - {csv_filename}: '{column_name}' 컬럼에서 {count_in_file:,}개 단어 추출 완료")
+    except Exception as e:
+        print(f"  - [WARN] {csv_filename} 파일 읽기 실패: {e}")
 
     if not search_words:
-        sys.stderr.write("[ERROR] CSV 파일 내에서 '{0}' 컬럼 값을 찾지 못했거나 값이 모두 비어 있습니다.\n".format(column_name))
+        print(f"[ERROR] CSV 파일 내에서 '{column_name}' 컬럼 값을 찾지 못했거나 값이 모두 비어 있습니다.")
         sys.exit(1)
 
-    print("[INFO] 메모리에 저장된 검색 단어 개수: {0:,} 개".format(len(search_words)))
+    print(f"[INFO] 메모리에 저장된 검색 단어 개수: {len(search_words):,} 개")
     print("-" * 60)
 
     # 2. 지정된 디렉토리 하위 소스 파일 탐색 및 매칭
     print("[INFO] 소스 파일 스캔 및 매칭 시작...")
-    match_buffer = []
-    total_files_scanned = 0
-    total_lines_scanned = 0
+    match_buffer         = []
+    total_files_scanned  = 0
+    total_lines_scanned  = 0
+    total_lines_skipped  = 0  # 주석 라인 스킵 카운트
 
     lower_words_map = {w.lower(): w for w in search_words}
 
@@ -332,20 +355,31 @@ def main():
         for file in sorted(files):
             if not file.lower().endswith(tuple(TARGET_EXTENSIONS)):
                 continue
-            
+
             full_path = os.path.join(root, file)
-            base_dir = os.path.abspath(root)
+            base_dir  = os.path.abspath(root)
             total_files_scanned += 1
+            
+            # 파일 확장자 추출
+            _, file_ext = os.path.splitext(file)
 
             try:
-                with codecs.open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
                     for line_no, raw_line in enumerate(f, 1):
                         total_lines_scanned += 1
                         line_content = raw_line.strip()
                         if not line_content:
                             continue
+
+                        # 주석 제거
+                        line_without_comments = remove_comments_from_line(line_content, file_ext)
                         
-                        lower_line = line_content.lower()
+                        # 주석 제거 후 라인이 비어있으면 스킵
+                        if not line_without_comments:
+                            total_lines_skipped += 1
+                            continue
+
+                        lower_line = line_without_comments.lower()
                         for lower_word, orig_word in lower_words_map.items():
                             if lower_word in lower_line:
                                 match_buffer.append({
@@ -353,17 +387,18 @@ def main():
                                     "file_name":      file,
                                     "dir_file":       full_path,
                                     "line_no":        line_no,
-                                    "line_content":   line_content,
+                                    "line_content":   line_without_comments,  # 주석 제거된 라인 저장
                                     "search_column":  column_name,
                                     "matched_word":   orig_word,
                                 })
-            except Exception, e:
-                sys.stderr.write("  - [WARN] 소스 파일 읽기 실패: {0} ({1})\n".format(full_path, e))
+            except Exception as e:
+                print(f"  - [WARN] 소스 파일 읽기 실패: {full_path} ({e})")
 
     print("[INFO] 소스 탐색 완료:")
-    print("  - 스캔한 파일 개수  : {0:,} 개".format(total_files_scanned))
-    print("  - 스캔한 총 라인 수 : {0:,} 줄".format(total_lines_scanned))
-    print("  - 매칭 발견 건수   : {0:,} 건".format(len(match_buffer)))
+    print(f"  - 스캔한 파일 개수  : {total_files_scanned:,} 개")
+    print(f"  - 스캔한 총 라인 수 : {total_lines_scanned:,} 줄")
+    print(f"  - 스킵된 주석 라인  : {total_lines_skipped:,} 줄")
+    print(f"  - 매칭 발견 건수    : {len(match_buffer):,} 건")
     print("-" * 60)
 
     # 3. DB 적재 진행
@@ -372,23 +407,24 @@ def main():
         sys.exit(0)
 
     print("[INFO] MySQL 테이블에 매칭 데이터 적재 시작...")
-    
+
     try:
-        inserted_cnt, db_err = db_insert_matches(match_buffer, run_id, op_dtm, mysql_conf, search_dir)
-    except Exception, e:
-        sys.stderr.write("=" * 60 + "\n")
-        sys.stderr.write(" 소스 키워드 탐색 적재 실패\n")
-        sys.stderr.write("=" * 60 + "\n")
-        sys.stderr.write("  DB 오류 내용       : {0}\n".format(e))
+        inserted_cnt = db_insert_matches(match_buffer, run_id, op_dtm, mysql_conf, search_dir)
+    except Exception as e:
+        print("=" * 60)
+        print(" 소스 키워드 탐색 적재 실패")
+        print("=" * 60)
+        print(f"  DB 오류 내용       : {e}")
         sys.exit(1)
 
     print("=" * 60)
     print(" 소스 키워드 탐색 성공 완료")
     print("=" * 60)
-    print("  적재 테이블        : {0}.{1}".format(mysql_conf.get("database", ""), table_name))
-    print("  성공 적재 건수     : {0:,} 건".format(inserted_cnt))
-    print("  run_id (실행 ID)   : {0}".format(run_id))
+    print(f"  적재 테이블        : {mysql_conf.get('database', '')}.{table_name}")
+    print(f"  성공 적재 건수     : {inserted_cnt:,} 건")
+    print(f"  run_id (실행 ID)   : {run_id}")
     print("=" * 60)
+
 
 if __name__ == "__main__":
     main()
