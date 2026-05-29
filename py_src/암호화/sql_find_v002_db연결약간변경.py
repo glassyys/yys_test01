@@ -1,11 +1,11 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ===============================================================
 # sql_find_v002.py
 #
 # 실행예시:
-#   python sql_find_v001.py <검색대상_디렉토리> <CSV파일명> <칼럼명1> <칼럼명2> [--conf mysql.conf 경로]
-#   python sql_find_v002.py /NAS/MIDP/DBMSVC/MIDP/TMT key1_test.csv enc_rsn_desc key [--conf mysql.conf 경로]
+#   python3 sql_find_v001.py <검색대상_디렉토리> <CSV파일명> <칼럼명1> <칼럼명2> [--conf mysql.conf 경로]
+#   python3 sql_find_v002.py /NAS/MIDP/DBMSVC/MIDP/TMT key1_test.csv enc_rsn_desc key [--conf mysql.conf 경로]
 #
 # 설명:
 # 2. find소스(sql_find_v001.py)
@@ -25,12 +25,8 @@ import sys
 import csv
 import codecs
 import re
+import configparser
 from datetime import datetime
-
-try:
-    import configparser
-except ImportError:
-    import ConfigParser as configparser
 
 # ============================================================
 # 프로그램명 / 디렉토리 경로 설정
