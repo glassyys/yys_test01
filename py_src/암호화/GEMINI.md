@@ -33,7 +33,7 @@ if not os.path.exists(OUT_DIR):
 주요 설계 단위
 인자 파싱: argparse 모듈은 Python 2.7에서 표준 지원하므로 동일하게 사용하되 f-string 구문만 걷어냅니다.
 
-대용량 파일 대응: 한 번에 수백만 건의 데이터를 메모리에 올릴 경우 OOM(Out of Memory)으로 배치가 뻗게 됩니다. 이를 방지하기 위해 cursor.fetchmany(10000)를 사용하는 룹(Loop) 구조를 유지합니다.
+대용량 파일 대응: 한 일에 수백만 건의 데이터를 메모리에 올릴 경우 OOM(Out of Memory)으로 배치가 뻗게 됩니다. 이를 방지하기 위해 cursor.fetchmany(10000)를 사용하는 룹(Loop) 구조를 유지합니다.
 
 함수 단위 설계 명세
 load_mysql_conf(explicit_path=None): ConfigParser.ConfigParser()를 이용하여 mysql.conf 섹션을 파싱합니다. (Python 2는 대소문자 구문 주의)
